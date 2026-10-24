@@ -16,20 +16,15 @@ Vertex attribute in_vfMsBindPosePosition(12) is missing from the vertex descript
 
 补丁基于 MoltenVK-Detroit Release003，固定 SPIRV-Cross 依赖，并在流水线创建失败时记录 vertex-input 与 specialization 数据。缺失输入时返回错误，而不是分配默认格式和 buffer binding。这保留了原始故障，尚未实现未绑定属性的语义修复。
 
-## 构建与使用
+## 从这里开始
 
-先按 [构建说明](docs/zh-CN/build.md) 准备固定源码和依赖，再执行：
+**已经安装过？** 打开 Highball → **Detroit Isolated** → **Detroit (isolated Steam)**。不用重新编译或安装。
 
-~~~bash
-./build.sh
-python3 scripts/inspect_engine.py --source-bottle Games
-./install.sh --dry-run --game-dir "/path/to/steamapps/common/Detroit Become Human" \
-  --candidate-manifest "$PWD/build/candidate.json"
-~~~
+**第一次安装？** 按 [一步一步的安装教程](docs/zh-CN/usage.md) 操作。里面提供下载命令，说明怎样找到环境名称和游戏文件夹，以及如何预检、安装、启动和恢复。使用下载包无需编译 MoltenVK 或安装完整 Xcode。
 
-安装器校验哈希与架构。传入 --apply 后创建独立引擎、Bottle 和游戏副本，需要约 64 GiB 加缓存余量。回滚会归档私有环境并保留存档，详见 [安装与回滚](docs/zh-CN/usage.md)。
+已审查组合为 Highball 0.10.22、x64-crossover26.3-r28 引擎及 Steam Windows 版游戏。安装会复制原环境、引擎和游戏，需为三者及至少 5 GiB 余量准备空间，通常超过 64 GiB。原游戏和共享引擎保留，回滚将测试环境的存档留在归档中。
 
-本地引擎指纹只保存在被忽略的 engine-lock.local.json 中。机器记录、游戏文件、shader dump 与运行日志不入库。
+下载内容是**诊断预发布版**，尚未验证能修复游戏运行。自己编译源码属于可选步骤，单独见 [构建说明](docs/zh-CN/build.md)。
 
 ## 验证
 
@@ -43,6 +38,8 @@ make test
 ~~~
 
 测试仅使用临时 fixture，不启动 Wine 或游戏。设置 HIGHBALL_TEST_CLI 可额外用已有 Highball CLI 验证配置解码。
+
+本地引擎指纹只保存在被忽略的 engine-lock.local.json 中。机器记录、游戏文件、shader dump 与运行日志不入库。
 
 - [patches/](patches)：补丁系列与上游差异。
 - [scripts/](scripts)：安装事务与诊断工具。

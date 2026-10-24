@@ -16,20 +16,15 @@ Vertex attribute in_vfMsBindPosePosition(12) is missing from the vertex descript
 
 The patch starts from MoltenVK-Detroit Release003, pins its SPIRV-Cross dependency, and records vertex-input and specialization state when pipeline creation fails. Missing inputs are rejected rather than assigned a default format and buffer binding. This preserves the failure for investigation; it does not implement a semantic fix for unbound attributes.
 
-## Build and use
+## Start here
 
-Follow [Build](docs/build.md) to prepare the pinned sources and dependencies, then:
+**Already installed?** Open Highball → **Detroit Isolated** → **Detroit (isolated Steam)**. You do not need to build or install again.
 
-~~~bash
-./build.sh
-python3 scripts/inspect_engine.py --source-bottle Games
-./install.sh --dry-run --game-dir "/path/to/steamapps/common/Detroit Become Human" \
-  --candidate-manifest "$PWD/build/candidate.json"
-~~~
+**First installation?** Follow the [step-by-step installation guide](docs/usage.md). It includes download commands, how to find your environment name and game folder, checks before installation, launch instructions and rollback. The prebuilt library does not require compiling MoltenVK or installing full Xcode.
 
-The installer checks hashes and architecture, then creates a separate engine, Bottle and game copy when --apply is supplied. Allow approximately 64 GiB plus cache space. Rollback archives the private environment and retains saves. See [Usage](docs/usage.md).
+The reviewed baseline is Highball 0.10.22 with x64-crossover26.3-r28 and the Windows Steam edition of the game. Installation copies the source environment, engine and game; allow space for all three plus at least 5 GiB spare, typically more than 64 GiB. Original game files and the shared engine are preserved. Rollback retains the test environment's saves in an archive.
 
-The local engine fingerprint is stored in the ignored engine-lock.local.json. Machine records, game files, shader dumps and runtime logs are not tracked.
+The download is a **diagnostic prerelease**, not a verified gameplay fix. Source compilation is optional and documented separately in [Build](docs/build.md).
 
 ## Validation
 
@@ -43,6 +38,8 @@ make test
 ~~~
 
 Tests use temporary fixtures and do not start Wine or the game. Set HIGHBALL_TEST_CLI to include configuration decoding by an existing Highball CLI.
+
+The local engine fingerprint is stored in the ignored engine-lock.local.json. Machine records, game files, shader dumps and runtime logs are not tracked.
 
 - [patches/](patches): patch series and upstream reference diffs.
 - [scripts/](scripts): installation transactions and diagnostic utilities.
