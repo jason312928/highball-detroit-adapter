@@ -3,3 +3,6 @@
 licenses/** -whitespace
 src/include/** -whitespace
 vendor/** -whitespace
+audio/licenses/** -whitespace
+audio/src/*-before.inc -whitespace
+audio/src/*-after.inc -whitespace

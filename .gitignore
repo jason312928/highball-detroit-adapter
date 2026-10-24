@@ -14,3 +14,9 @@ work/
 **/protected-files*.json
 engine-lock.local.json
 release/
+
+*.dll
+*.exe
+*.dmp
+*.ips
+**/installation.json

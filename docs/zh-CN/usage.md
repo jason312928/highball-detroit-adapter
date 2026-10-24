@@ -4,13 +4,13 @@
 
 本教程使用下载好的运行库，**不用自己编译 MoltenVK，也不用安装完整 Xcode**。
 
-**当前是诊断版：可以安装独立测试环境，但尚未验证《底特律：变人》能完成首次着色器编译、进入主菜单和正常游玩。安装成功不代表故障已修复。**
+**实测已通过首次着色器编译原先卡住的 98% 阶段，并进入菜单及游戏场景。当前仍是预览版，画面、场景输入和长时间稳定性尚未验收；新音频修复通过专项测试，修补后的完整游戏回归仍待验证。**
 
 ## 已经安装过？
 
 打开 Highball。如果环境列表中已有 **Detroit Isolated**，进入它，点击 **Detroit (isolated Steam)** 即可测试。不要从原环境的游戏图标启动，否则仍可能使用原来的库。不用重复下载、构建或安装。
 
-没有这个环境时，按下面步骤首次安装。
+已有环境补装新音频修复时，按 [音频升级说明](../../audio/README.zh-CN.md) 操作。没有这个环境时，按下面步骤首次安装。
 
 ## 开始前确认
 
@@ -30,35 +30,29 @@
   set -e
   mkdir -p "$HOME/Downloads/highball-detroit-setup"
   cd "$HOME/Downloads/highball-detroit-setup"
-  if [ -e highball-detroit-adapter-main ]; then
-    echo "Download folder already exists; use it or choose another setup directory."
+  if [ -e highball-detroit-adapter-v0.2.0-preview.1 ]; then
+    echo "This version is already extracted; use the existing folder."
     exit 1
   fi
-  curl --fail --location --output source.zip \
-    https://github.com/jason312928/highball-detroit-adapter/archive/refs/heads/main.zip
-  unzip -q source.zip
-  cd highball-detroit-adapter-main
-  mkdir -p release/candidate
-  cd release
-  RELEASE="https://github.com/jason312928/highball-detroit-adapter/releases/download/v0.1.0-diagnostic.1"
-  ASSET="highball-detroit-moltenvk-v0.1.0-diagnostic.1-macos-x86_64.tar.gz"
+  RELEASE="https://github.com/jason312928/highball-detroit-adapter/releases/download/v0.2.0-preview.1"
+  ASSET="highball-detroit-adapter-v0.2.0-preview.1-macos-x86_64.tar.gz"
   curl --fail --location --output "$ASSET" "$RELEASE/$ASSET"
-  curl --fail --location --output 0001-strict-interfaces-and-pinned-spirv.patch \
-    "$RELEASE/0001-strict-interfaces-and-pinned-spirv.patch"
   curl --fail --location --output SHA256SUMS "$RELEASE/SHA256SUMS"
-  shasum -a 256 -c SHA256SUMS
-  tar -xzf "$ASSET" -C candidate
-  cd candidate
+  awk -v asset="$ASSET" '$2 == asset { print; found=1 } END { if (!found) exit 1 }' \
+    SHA256SUMS > selected.sha256
+  shasum -a 256 -c selected.sha256
+  tar -xzf "$ASSET"
+  cd highball-detroit-adapter-v0.2.0-preview.1
   shasum -a 256 -c SHA256SUMS
 )
 ~~~
 
-所有校验项显示 `OK` 后继续。如果目录里已有 `highball-detroit-adapter-main`，命令会停止以免覆盖文件；使用之前下载好的目录即可。
+所有校验项显示 `OK` 后继续。如果目录里已有 `highball-detroit-adapter-v0.2.0-preview.1`，命令会停止以免覆盖文件；使用之前下载好的目录即可。完整包已包含脚本和两种运行库，不必另下源码。
 
 接下来的步骤在**同一个终端窗口**执行，先进入脚本目录：
 
 ~~~bash
-cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-adapter-main"
+cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-adapter-v0.2.0-preview.1"
 ~~~
 
 包中的 `candidate.json` 是运行库的校验说明文件。后面的命令已填好它的位置，不用编辑它。
@@ -82,7 +76,7 @@ GAME_DIR="/这里粘贴刚复制的游戏文件夹路径"
 ~~~bash
 python3 scripts/inspect_engine.py --source-bottle "$SOURCE_BOTTLE" &&
 ./install.sh --dry-run --source-bottle "$SOURCE_BOTTLE" \
-  --game-dir "$GAME_DIR" --candidate-manifest "$PWD/release/candidate/candidate.json"
+  --game-dir "$GAME_DIR" --candidate-manifest "$PWD/candidate/candidate.json"
 ~~~
 
 看到 `DRY-RUN complete. No Highball or game files written.` 表示路径、库校验和引擎指纹通过，**尚未安装**。这一步只在下载目录记录日志和本地指纹，不启动游戏。
@@ -95,8 +89,11 @@ python3 scripts/inspect_engine.py --source-bottle "$SOURCE_BOTTLE" &&
 
 ~~~bash
 ./install.sh --apply --source-bottle "$SOURCE_BOTTLE" \
-  --game-dir "$GAME_DIR" --candidate-manifest "$PWD/release/candidate/candidate.json" &&
-./verify.sh
+  --game-dir "$GAME_DIR" --candidate-manifest "$PWD/candidate/candidate.json" &&
+./verify.sh &&
+./audio/install.sh --dry-run &&
+./audio/install.sh --apply &&
+./audio/verify.sh
 ~~~
 
 复制游戏可能需要较长时间。看到 `Private diagnostic engine and Bottle installed.`，随后出现 `Installed files verified:`，表示安装和文件校验完成。重复安装会核对已有结果，不要手动把 dylib 复制进共享引擎。
@@ -112,7 +109,9 @@ python3 scripts/inspect_engine.py --source-bottle "$SOURCE_BOTTLE" &&
 
 如果 Steam 显示未安装游戏，先确认进入的是 `Detroit Isolated`，不要立即重下整份游戏。如果看不到新环境或启动项，退出并重新打开 Highball；仍没有时运行 `./verify.sh` 检查。
 
-**着色器完成、菜单可操作、场景正常运行，才算游戏测试通过。** `verify.sh` 只核对文件，不会证明游戏内这些步骤完成。当前项目尚未完成这项验收。
+**着色器完成、菜单可操作、场景正常运行，才算游戏测试通过。** `verify.sh` 只核对文件，不会证明游戏内这些步骤完成。已审查运行到达了菜单和场景，但画面正确性、场景交互和音频修补后的稳定性尚未完成验收。
+
+画面高光泛白时，可在游戏图形菜单关闭 HDR，对比同一场景。这是诊断对比，尚未验证一定能修复画面。部分场景交互需要按住左键，再沿提示方向移动；菜单点击正常，不能证明这一输入路径也正常。
 
 ## 5. 卡住或崩溃时
 
@@ -135,6 +134,8 @@ GAME_LOG="/这里粘贴启动日志路径"
 退出测试游戏及其 Windows Steam，关闭 Wine 程序和 Highball，再执行：
 
 ~~~bash
+./audio/rollback.sh --dry-run &&
+./audio/rollback.sh --apply &&
 ./rollback.sh --dry-run &&
 ./rollback.sh --apply
 ~~~

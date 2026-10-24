@@ -2,33 +2,37 @@
 
 [简体中文](README.zh-CN.md)
 
-Diagnostics and isolated MoltenVK testing for **Detroit: Become Human** on [Highball](https://github.com/gauthierpiarrette/highball).
+An isolated compatibility adapter and diagnostics for **Detroit: Become Human** on [Highball](https://github.com/gauthierpiarrette/highball).
 
-The failure under investigation occurs during the game's first shader compilation: progress stalls at 98%, with Metal rejecting a vertex input missing from the pipeline descriptor.
+**Tested progress: the game passes the former 98% stop during initial shader compilation, reaches the main menu and enters a gameplay scene on the reviewed Highball engine.**
+
+The original startup failure included this Metal vertex-input error:
 
 ~~~text
 Vertex attribute in_vfMsBindPosePosition(12) is missing from the vertex descriptor.
 ~~~
 
-**Status: diagnostic prerelease. Shader compilation completion, the main menu and scene rendering remain unverified.**
+**Status: preview. Visual and scene-input issues remain open. The new audio fix has passed failure-injection and runtime audio tests; gameplay after that fix and long-session stability still require validation.**
 
 ## Patch scope
 
-The patch starts from MoltenVK-Detroit Release003, pins its SPIRV-Cross dependency, and records vertex-input and specialization state when pipeline creation fails. Missing inputs are rejected rather than assigned a default format and buffer binding. This preserves the failure for investigation; it does not implement a semantic fix for unbound attributes.
+The patch starts from MoltenVK-Detroit Release003, pins its SPIRV-Cross dependency, and records vertex-input and specialization state when pipeline creation fails. Missing inputs are rejected rather than assigned a default format and buffer binding. This retains failed-pipeline evidence; reaching a scene does not establish that every vertex-input mismatch is repaired.
+
+The [XAudio2 fix](audio/README.md) handles failed audio-device queries and propagates mastering-voice creation errors. It addresses the identified audio access-violation path without inventing a device format or returning success for an invalid voice.
 
 ## Start here
 
-**Already installed?** Open Highball → **Detroit Isolated** → **Detroit (isolated Steam)**. You do not need to build or install again.
+**Already installed?** Open Highball → **Detroit Isolated** → **Detroit (isolated Steam)**. To add the new audio fix, follow the [audio upgrade instructions](audio/README.md).
 
 **First installation?** Follow the [step-by-step installation guide](docs/usage.md). It includes download commands, how to find your environment name and game folder, checks before installation, launch instructions and rollback. The prebuilt library does not require compiling MoltenVK or installing full Xcode.
 
 The reviewed baseline is Highball 0.10.22 with x64-crossover26.3-r28 and the Windows Steam edition of the game. Installation copies the source environment, engine and game; allow space for all three plus at least 5 GiB spare, typically more than 64 GiB. Original game files and the shared engine are preserved. Rollback retains the test environment's saves in an archive.
 
-The download is a **diagnostic prerelease**, not a verified gameplay fix. Source compilation is optional and documented separately in [Build](docs/build.md).
+The [v0.2.0-preview.1 release](https://github.com/jason312928/highball-detroit-adapter/releases/tag/v0.2.0-preview.1) includes a complete installation archive and a smaller audio-only upgrade. Daily gameplay stability is not established. Source compilation is optional and documented separately in [Build](docs/build.md).
 
 ## Validation
 
-Complete library compilation, the Rosetta/Vulkan probe, isolated installation and actual game-process library loading have been verified. Game-level acceptance remains open. The distinction and remaining work are documented in [Validation](docs/validation.md) and [Vertex input](docs/vertex-input.md).
+Initial shader compilation has progressed past 98%, and an interactive run reached the menu and a scene. Library compilation, loading, transactional installation and the new audio failure paths have also been tested. Visual correctness, scene input, audio-device reconnection during gameplay and long-session stability remain open. The distinction and remaining work are documented in [Validation](docs/validation.md) and [Vertex input](docs/vertex-input.md).
 
 ## Development
 

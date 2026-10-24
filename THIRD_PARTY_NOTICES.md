@@ -11,6 +11,8 @@
 
 [MoltenVK license](licenses/MoltenVK-Apache-2.0.txt) and [Highball license](licenses/Highball-GPL-3.0.txt) are retained for reference. Downloaded dependencies retain their upstream licenses.
 
-Wine, D3DMetal, game files and prebuilt dylibs are not distributed by this repository.
+D3DMetal, game files, runtime logs and crash dumps are not distributed. Git contains source and patches; release archives contain the reviewed MoltenVK and XAudio2 binaries.
+
+The audio changes derive from Wine (LGPL-2.1-or-later) and its bundled FAudio (zlib-style license). Notices are in [audio/licenses](audio/licenses/). Each audio binary release also provides a corresponding-source archive containing the patched Wine tree and build instructions, with the original source URL/hash and independent patches in [audio/source-lock.json](audio/source-lock.json).
 
 The diagnostic library links SPIRV-Cross, SPIRV-Tools and cereal. Their complete notices are retained in licenses/ along with SPIRV-Headers notices. Binary release archives include these files.

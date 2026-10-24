@@ -4,13 +4,13 @@
 
 This guide uses the prebuilt library. **You do not need to compile MoltenVK or install the full Xcode application.**
 
-**This is a diagnostic build. It can install an independent test environment, but completion of Detroit: Become Human's first shader compilation, the main menu and gameplay remain unverified. Installation success does not mean the game is fixed.**
+**Tested: the game has passed the former 98% stop in initial shader compilation and reached the menu and a gameplay scene. This preview still has unresolved visual/input issues and unverified long-session stability. The new audio fix has passed focused tests; gameplay after it remains unverified.**
 
 ## Already installed?
 
 Open Highball. If **Detroit Isolated** is in the environment list, open it and select **Detroit (isolated Steam)**. Launching from the original environment may still use its original library. You do not need to download, build or install again.
 
-If that environment is absent, follow the first-time steps below.
+To add the new audio fix to an existing installation, use the [audio-only upgrade](../audio/README.md). If the environment is absent, follow the first-time steps below.
 
 ## Before you start
 
@@ -30,35 +30,29 @@ Open macOS Terminal, paste this entire block and press Return. A failed download
   set -e
   mkdir -p "$HOME/Downloads/highball-detroit-setup"
   cd "$HOME/Downloads/highball-detroit-setup"
-  if [ -e highball-detroit-adapter-main ]; then
-    echo "Download folder already exists; use it or choose another setup directory."
+  if [ -e highball-detroit-adapter-v0.2.0-preview.1 ]; then
+    echo "This version is already extracted; use the existing folder."
     exit 1
   fi
-  curl --fail --location --output source.zip \
-    https://github.com/jason312928/highball-detroit-adapter/archive/refs/heads/main.zip
-  unzip -q source.zip
-  cd highball-detroit-adapter-main
-  mkdir -p release/candidate
-  cd release
-  RELEASE="https://github.com/jason312928/highball-detroit-adapter/releases/download/v0.1.0-diagnostic.1"
-  ASSET="highball-detroit-moltenvk-v0.1.0-diagnostic.1-macos-x86_64.tar.gz"
+  RELEASE="https://github.com/jason312928/highball-detroit-adapter/releases/download/v0.2.0-preview.1"
+  ASSET="highball-detroit-adapter-v0.2.0-preview.1-macos-x86_64.tar.gz"
   curl --fail --location --output "$ASSET" "$RELEASE/$ASSET"
-  curl --fail --location --output 0001-strict-interfaces-and-pinned-spirv.patch \
-    "$RELEASE/0001-strict-interfaces-and-pinned-spirv.patch"
   curl --fail --location --output SHA256SUMS "$RELEASE/SHA256SUMS"
-  shasum -a 256 -c SHA256SUMS
-  tar -xzf "$ASSET" -C candidate
-  cd candidate
+  awk -v asset="$ASSET" '$2 == asset { print; found=1 } END { if (!found) exit 1 }' \
+    SHA256SUMS > selected.sha256
+  shasum -a 256 -c selected.sha256
+  tar -xzf "$ASSET"
+  cd highball-detroit-adapter-v0.2.0-preview.1
   shasum -a 256 -c SHA256SUMS
 )
 ~~~
 
-Continue when every checksum entry says `OK`. If `highball-detroit-adapter-main` already exists, the block stops to avoid overwriting files. Use that existing download instead.
+Continue when every checksum entry says `OK`. If `highball-detroit-adapter-v0.2.0-preview.1` already exists, the block stops to avoid overwriting files. Use that existing download instead. The full archive contains the scripts and both libraries; no separate source download is needed.
 
 Run the remaining steps in the **same Terminal window**, starting in the scripts directory:
 
 ~~~bash
-cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-adapter-main"
+cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-adapter-v0.2.0-preview.1"
 ~~~
 
 The downloaded `candidate.json` describes the library and its checksums. Its path is already filled in below; do not edit it.
@@ -82,7 +76,7 @@ Run the read-only checks:
 ~~~bash
 python3 scripts/inspect_engine.py --source-bottle "$SOURCE_BOTTLE" &&
 ./install.sh --dry-run --source-bottle "$SOURCE_BOTTLE" \
-  --game-dir "$GAME_DIR" --candidate-manifest "$PWD/release/candidate/candidate.json"
+  --game-dir "$GAME_DIR" --candidate-manifest "$PWD/candidate/candidate.json"
 ~~~
 
 `DRY-RUN complete. No Highball or game files written.` means paths, library checksums and the engine fingerprint passed. **Nothing has been installed.** This step writes only logs and a local fingerprint in the download directory; it does not start the game.
@@ -95,8 +89,11 @@ Quit Windows Steam, the game, other Wine programs and Highball normally, then ru
 
 ~~~bash
 ./install.sh --apply --source-bottle "$SOURCE_BOTTLE" \
-  --game-dir "$GAME_DIR" --candidate-manifest "$PWD/release/candidate/candidate.json" &&
-./verify.sh
+  --game-dir "$GAME_DIR" --candidate-manifest "$PWD/candidate/candidate.json" &&
+./verify.sh &&
+./audio/install.sh --dry-run &&
+./audio/install.sh --apply &&
+./audio/verify.sh
 ~~~
 
 Copying the game may take time. `Private diagnostic engine and Bottle installed.`, followed by `Installed files verified:`, means installation and file verification completed. Repeating installation checks the existing result. Do not manually copy the dylib into a shared engine.
@@ -112,7 +109,9 @@ The new environment is **Detroit Isolated**, using **detroit-strict-003-r28**. T
 
 If Steam says the game is not installed, check that you opened `Detroit Isolated` before downloading another copy. If the environment or launch item is missing, quit and reopen Highball; if still missing, run `./verify.sh`.
 
-**Shader compilation must complete, the menu must respond and a scene must run correctly for the game test to pass.** `verify.sh` checks files; it cannot establish these in-game results. The project has not completed this acceptance test yet.
+**Shader compilation must complete, the menu must respond and a scene must run correctly for the game test to pass.** `verify.sh` checks files; it cannot establish these in-game results. The reviewed run reached the menu and scene, but visual correctness, scene interaction and post-audio-fix stability have not completed acceptance.
+
+For clipped highlights, try disabling HDR in the game’s graphics menu and compare the same scene. This is a diagnostic comparison, not a verified visual fix. Some scene interactions require holding the left mouse button while moving along the displayed gesture; menu clicks alone do not test that input path.
 
 ## 5. If the game stalls or crashes
 
@@ -135,6 +134,8 @@ Script logs are in the download directory's `logs/` folder; full game logs stay 
 Exit the test game and its Windows Steam instance, quit Wine programs and Highball, then run:
 
 ~~~bash
+./audio/rollback.sh --dry-run &&
+./audio/rollback.sh --apply &&
 ./rollback.sh --dry-run &&
 ./rollback.sh --apply
 ~~~

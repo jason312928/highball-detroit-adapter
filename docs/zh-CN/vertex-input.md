@@ -23,3 +23,7 @@ Release003 对部分缺失输入补入 UChar4、已有 buffer 与 offset 0，还
 下一步需要捕获同一失败 pipeline 的模块、entry point、specialization 值、完整 vertex-input state 与相关动态状态。语义修复应以这些数据为依据。
 
 相关讨论：[MoltenVK #2054](https://github.com/KhronosGroup/MoltenVK/issues/2054)。
+
+## 后续运行证据
+
+实际严格诊断记录到 shader 使用 location 12，但某个提交的顶点布局只有 location 10、11、3、8，均使用 binding 0，stride 为 32。游戏能够进入菜单和场景时，仍可能同时存在这些流水线错误；启动进展不能证明所有受影响绘制都正确。

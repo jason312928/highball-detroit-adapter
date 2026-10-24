@@ -1,0 +1,28 @@
+{
+  "wine": {
+    "version": "CrossOver 26.3.0 Wine sources",
+    "url": "https://media.codeweavers.com/pub/crossover/source/crossover-sources-26.3.0.tar.gz",
+    "sha256": "ac99c8ca4b3848f3e81784135f023df266b61c2345726ea55a50b3e030dd6872",
+    "subdir": "sources/wine"
+  },
+  "engine_recipe_commit": "fc628ae108aead7270812088a38b9ef942ba6970",
+  "faudio_failure_propagation_reference": "67ed0a1eac0c52cc51e2bb892ccdb741d01bdec3",
+  "llvm_mingw": {
+    "version": "20260922-ucrt-macos-universal",
+    "sha256": "52e5f5a7b131021d0c39a37a38fa380a1da7885cd04bd61afd0cd4ecfb8bc1f3"
+  },
+  "bison": {
+    "version": "3.8.2",
+    "sha256": "9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2"
+  },
+  "patches": {
+    "0002-xaudio-propagate-mastering-voice-errors.patch": "401e4889cb459d8124afa0826261ace979cc313e2dc458d9d47ad669cce6c414",
+    "0001-faudio-propagate-device-query-errors.patch": "2c610b50a118a4b12c10b191ef576cd2898ed9e691dd94d2331c0b3f33dad218"
+  },
+  "candidate": {
+    "file": "xaudio2_8.dll",
+    "arch": "x86_64 PE32+",
+    "sha256": "a19d4e199aaf70bb2990a51bf6fda9c4466612c9e2306365ff29f7d8983fd2cb",
+    "gameplay_validated": false
+  }
+}

@@ -14,6 +14,8 @@ The original failure included locations 12 and 3. The minimal Metal reproduction
 
 The cached module has not been associated with a specific failed pipeline. Application state, cache selection and translation/interface pruning remain possible explanations. No game shader is distributed here.
 
+A live strict diagnostic also recorded location 12 being used while one supplied vertex layout contained locations 10, 11, 3 and 8, on binding 0 with stride 32. These pipeline errors can coexist with reaching the menu and a scene; startup progress alone does not validate every affected draw.
+
 ## Diagnostic patch
 
 Release003 supplies UChar4, an existing buffer and offset zero for some missing inputs. It also adjusts unmatched stage outputs. Those values are not derived from the missing Vulkan input descriptions.

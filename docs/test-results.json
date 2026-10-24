@@ -1,0 +1,33 @@
+{
+  "release": "v0.2.0-preview.1",
+  "software_baseline": {
+    "highball": "0.10.22",
+    "engine": "x64-crossover26.3-r28",
+    "moltenvk_sha256": "7f96977d64c0049b9b7b5b3759e6ad23a7cc764a00d7a166274bdd2b4c70e681"
+  },
+  "interactive_test_before_audio_fix": {
+    "startup_progress_beyond_98_percent": "passed",
+    "main_menu_reached": "passed",
+    "menu_mouse_clicks": "passed",
+    "gameplay_scene_entered": "passed",
+    "scene_mouse_interaction": "issue_observed",
+    "visual_correctness": "highlight_clipping_observed",
+    "session_stability": "access_violation_observed"
+  },
+  "audio_fix": {
+    "sha256": "a19d4e199aaf70bb2990a51bf6fda9c4466612c9e2306365ff29f7d8983fd2cb",
+    "old_failure_paths_reproduced": true,
+    "patched_device_query_cases": "passed",
+    "patched_mastering_voice_cases": "passed",
+    "actual_dll_load_and_silent_buffer_consumption": "passed",
+    "gameplay_after_fix": "not_yet_validated",
+    "physical_device_reconnection": "not_yet_validated"
+  },
+  "installer_regression_tests": {
+    "adapter": 19,
+    "audio": 7,
+    "result": "26_passed"
+  },
+  "daily_gameplay_acceptance": "not_completed",
+  "privacy": "Only aggregate results are published. No runtime logs, dumps, shaders, screenshots, game files, device identifiers or machine snapshots are included."
+}

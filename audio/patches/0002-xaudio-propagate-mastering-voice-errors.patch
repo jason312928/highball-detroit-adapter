@@ -1,0 +1,57 @@
+--- a/dlls/xaudio2_7/xaudio_dll.c
++++ b/dlls/xaudio2_7/xaudio_dll.c
+@@ -1748,6 +1748,7 @@
+ {
+     IXAudio2Impl *This = impl_from_IXAudio2(iface);
+     FAudioEffectChain *chain;
++    HRESULT hr;
+ 
+     TRACE("(%p)->(%p, %u, %u, 0x%x, %p)\n", This,
+             ppMasteringVoice, inputChannels, inputSampleRate, flags, pEffectChain);
+@@ -1760,13 +1761,14 @@
+ 
+     EnterCriticalSection(&This->lock);
+ 
+-    *ppMasteringVoice = &This->mst.IXAudio2MasteringVoice_iface;
++    *ppMasteringVoice = NULL;
+ 
+     EnterCriticalSection(&This->mst.lock);
+ 
+     if(This->mst.in_use){
+         LeaveCriticalSection(&This->mst.lock);
+         LeaveCriticalSection(&This->lock);
++        free_effect_chain(chain);
+         return COMPAT_E_INVALID_CALL;
+     }
+ 
+@@ -1777,17 +1779,28 @@
+ #if XAUDIO2_VER >= 8
+     TRACE("device id %s, category %#x\n", debugstr_w(deviceId), streamCategory);
+ 
+-    FAudio_CreateMasteringVoice8(This->faudio, &This->mst.faudio_voice, inputChannels,
++    hr = FAudio_CreateMasteringVoice8(This->faudio, &This->mst.faudio_voice, inputChannels,
+             inputSampleRate, flags, NULL /* TODO: (uint16_t*)deviceId */,
+             This->mst.effect_chain, (FAudioStreamCategory)streamCategory);
+ #else
+     TRACE("device index %u\n", index);
+ 
+-    FAudio_CreateMasteringVoice(This->faudio, &This->mst.faudio_voice, inputChannels,
++    hr = FAudio_CreateMasteringVoice(This->faudio, &This->mst.faudio_voice, inputChannels,
+             inputSampleRate, flags, index, This->mst.effect_chain);
+ #endif
+ 
++    if (FAILED(hr))
++    {
++        WARN("HB_DETROIT_AUDIO_V1: CreateMasteringVoice failed, hr %#lx.\n", hr);
++        free_effect_chain(This->mst.effect_chain);
++        This->mst.effect_chain = NULL;
++        This->mst.faudio_voice = NULL;
++        LeaveCriticalSection(&This->mst.lock);
++        return hr;
++    }
++
+     This->mst.in_use = TRUE;
++    *ppMasteringVoice = &This->mst.IXAudio2MasteringVoice_iface;
+ 
+     LeaveCriticalSection(&This->mst.lock);
+ 
