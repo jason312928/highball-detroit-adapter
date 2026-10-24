@@ -1,0 +1,210 @@
+diff --git a/ExternalRevisions/SPIRV-Cross_repo_revision b/ExternalRevisions/SPIRV-Cross_repo_revision
+index ba2906d0..82b0566c 100644
+--- a/ExternalRevisions/SPIRV-Cross_repo_revision
++++ b/ExternalRevisions/SPIRV-Cross_repo_revision
+@@ -1 +1 @@
+-main
++05583ac1537d777d304128142de2365bfa4a38df
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+index f34f077a..a6a3a453 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+@@ -47,6 +47,47 @@
+ using namespace mvk;
+ using namespace SPIRV_CROSS_NAMESPACE;
+ 
++// Only invoked after a vertex-stage failure. Log the app's data without guessing a mapping.
++static void mvkDTRLogVertexInterface(MVKBaseObject* object, const VkGraphicsPipelineCreateInfo* info,
++                                   const VkPipelineShaderStageCreateInfo* stage) {
++    object->reportMessage(MVK_CONFIG_LOG_LEVEL_ERROR, "HB_DETROIT_STRICT_INTERFACE_V1: pipeline=%p entry=%s", info,
++                stage && stage->pName ? stage->pName : "<null>");
++    const auto* vi = info ? info->pVertexInputState : nullptr;
++    if (vi) {
++        object->reportMessage(MVK_CONFIG_LOG_LEVEL_ERROR, "HB_DETROIT_STRICT_INTERFACE_V1: bindings=%u attributes=%u",
++                    vi->vertexBindingDescriptionCount, vi->vertexAttributeDescriptionCount);
++        for (uint32_t i = 0; i < vi->vertexBindingDescriptionCount; ++i) {
++            const auto& b = vi->pVertexBindingDescriptions[i];
++            object->reportMessage(MVK_CONFIG_LOG_LEVEL_ERROR, "HB_DETROIT_STRICT_INTERFACE_V1: binding=%u stride=%u rate=%u",
++                        b.binding, b.stride, b.inputRate);
++        }
++        for (uint32_t i = 0; i < vi->vertexAttributeDescriptionCount; ++i) {
++            const auto& a = vi->pVertexAttributeDescriptions[i];
++            object->reportMessage(MVK_CONFIG_LOG_LEVEL_ERROR, "HB_DETROIT_STRICT_INTERFACE_V1: location=%u binding=%u format=%u offset=%u",
++                        a.location, a.binding, a.format, a.offset);
++        }
++        for (const auto* next = static_cast<const VkBaseInStructure*>(vi->pNext); next; next = next->pNext) {
++            object->reportMessage(MVK_CONFIG_LOG_LEVEL_ERROR, "HB_DETROIT_STRICT_INTERFACE_V1: vertex-input pNext sType=%u", next->sType);
++        }
++    }
++    const auto* si = stage ? stage->pSpecializationInfo : nullptr;
++    if (si) {
++        const char* hex = "0123456789abcdef";
++        for (uint32_t i = 0; i < si->mapEntryCount; ++i) {
++            const auto& e = si->pMapEntries[i];
++            std::string value;
++            if (si->pData && e.offset <= si->dataSize && e.size <= si->dataSize - e.offset) {
++                const auto* data = static_cast<const unsigned char*>(si->pData) + e.offset;
++                for (size_t j = 0; j < e.size; ++j) {
++                    value += hex[data[j] >> 4]; value += hex[data[j] & 15];
++                }
++            } else { value = "<invalid range>"; }
++            object->reportMessage(MVK_CONFIG_LOG_LEVEL_ERROR, "HB_DETROIT_STRICT_INTERFACE_V1: specialization id=%u offset=%u size=%zu bytes=%s",
++                        e.constantID, e.offset, e.size, value.c_str());
++        }
++    }
++}
++
+ #if 0
+ #define MVK_DTR_BINARY_ARCHIVE_LOG_PREFIX "MVK-DTR-BINARY-ARCHIVE: "
+ #define MVK_DTR_BINARY_ARCHIVE_SERIALIZE_INTERVAL 500
+@@ -1741,8 +1782,9 @@ static bool usesConstantColor(MVKRenderStateFlags dynamic, const VkPipelineColor
+ 			for (auto& vo : vtxOutputs) {
+ 				if (vo.location == fi.location) {
+ 					if (vo.baseType != fi.baseType) {
+-						reportWarning(VK_ERROR_VALIDATION_FAILED, "Type mismatch at location %u: Vertex stage outputs type %d, but Fragment stage expects type %d. Aligning types.", fi.location, vo.baseType, fi.baseType);
+-						vo.baseType = fi.baseType;
++						setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "HB_DETROIT_STRICT_INTERFACE_V1: Vertex/fragment type mismatch at location %u (%d/%d).", fi.location, vo.baseType, fi.baseType));
++						[plDesc release];
++						return nil;
+ 					}
+ 					vo.isUsed = true;
+ 					found = true;
+@@ -1750,19 +1792,27 @@ static bool usesConstantColor(MVKRenderStateFlags dynamic, const VkPipelineColor
+ 				}
+ 			}
+ 			if (!found) {
+-				reportWarning(VK_ERROR_VALIDATION_FAILED, "Fragment shader uses input at location %u, but vertex shader does not output it. Adding dummy vertex output.", fi.location);
+-				vtxOutputs.push_back(fi);
+-				vtxOutputs.back().isUsed = true;
++				setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "HB_DETROIT_STRICT_INTERFACE_V1: fragment location %u is not written by Vertex.", fi.location));
++				[plDesc release];
++				return nil;
+ 			}
+ 		}
+ 	}
+ 
+ 	// Add shader stages. Compile vertex shader before others just in case conversion changes anything...like rasterizaion disable.
+-	if (!addVertexShaderToPipeline(plDesc, pCreateInfo, shaderConfig, vtxOutputs, pVertexSS, pVertexFB, pFragmentSS)) { return nil; }
++	if (!addVertexShaderToPipeline(plDesc, pCreateInfo, shaderConfig, vtxOutputs, pVertexSS, pVertexFB, pFragmentSS)) {
++		mvkDTRLogVertexInterface(this, pCreateInfo, pVertexSS);
++		[plDesc release];
++		return nil;
++	}
+ 
+ 	// Vertex input
+ 	// This needs to happen before compiling the fragment shader, or we'll lose information on vertex attributes.
+-	if (!addVertexInputToPipeline(plDesc.vertexDescriptor, pCreateInfo->pVertexInputState, shaderConfig)) { return nil; }
++	if (!addVertexInputToPipeline(plDesc.vertexDescriptor, pCreateInfo->pVertexInputState, shaderConfig)) {
++		mvkDTRLogVertexInterface(this, pCreateInfo, pVertexSS);
++		[plDesc release];
++		return nil;
++	}
+ 
+ 	// Fragment shader - only add if rasterization is enabled
+ 	if (!addFragmentShaderToPipeline(plDesc, pCreateInfo, shaderConfig, vtxOutputs, pFragmentSS, pFragmentFB)) { return nil; }
+@@ -1998,8 +2048,9 @@ static MTLVertexFormat mvkAdjustFormatVectorToSize(MTLVertexFormat format, uint3
+ 			for (auto& vo : teOutputs) {
+ 				if (vo.location == fi.location) {
+ 					if (vo.baseType != fi.baseType) {
+-						reportWarning(VK_ERROR_VALIDATION_FAILED, "Type mismatch at location %u: TessEval stage outputs type %d, but Fragment stage expects type %d. Aligning types.", fi.location, vo.baseType, fi.baseType);
+-						vo.baseType = fi.baseType;
++						setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "HB_DETROIT_STRICT_INTERFACE_V1: TessEval/fragment type mismatch at location %u (%d/%d).", fi.location, vo.baseType, fi.baseType));
++						[plDesc release];
++						return nil;
+ 					}
+ 					vo.isUsed = true;
+ 					found = true;
+@@ -2007,9 +2058,9 @@ static MTLVertexFormat mvkAdjustFormatVectorToSize(MTLVertexFormat format, uint3
+ 				}
+ 			}
+ 			if (!found) {
+-				reportWarning(VK_ERROR_VALIDATION_FAILED, "Fragment shader uses input at location %u, but TessEval shader does not output it. Adding dummy TessEval output.", fi.location);
+-				teOutputs.push_back(fi);
+-				teOutputs.back().isUsed = true;
++				setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "HB_DETROIT_STRICT_INTERFACE_V1: fragment location %u is not written by TessEval.", fi.location));
++				[plDesc release];
++				return nil;
+ 			}
+ 		}
+ 	}
+@@ -2420,39 +2471,17 @@ static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfigura
+ 		}
+ 	}
+ 
+-	// Metal requires all vertex attributes used by the shader to be defined in the vertex descriptor.
+-	// If the app hasn't provided one, add a dummy one.
+-	uint32_t dummyBufferIndex = 0;
+-	bool foundUsedBuffer = false;
+-	for (uint32_t i = 0; i < kMVKMaxBufferCount; i++) {
+-		if (_mtlVertexBuffers.get(i)) {
+-			dummyBufferIndex = i;
+-			foundUsedBuffer = true;
+-			break;
+-		}
+-	}
+-
+-	for (auto& ctxSI : shaderConfig.shaderInputs) {
+-		if (ctxSI.outIsUsedByShader && ctxSI.shaderVar.builtin == spv::BuiltInMax && std::find(boundLocations.begin(), boundLocations.end(), ctxSI.shaderVar.location) == boundLocations.end()) {
+-			if (ctxSI.shaderVar.location < 31) {
+-				auto vaDesc = inputDesc.attributes[ctxSI.shaderVar.location];
+-				if ((uint32_t)vaDesc.format == 0) {
+-					vaDesc.format = (decltype(vaDesc.format))MTLVertexFormatUChar4;
+-					vaDesc.bufferIndex = dummyBufferIndex;
+-					vaDesc.offset = 0;
+-				}
+-			}
++	// HB_DETROIT_STRICT_INTERFACE_V1: never invent a vertex format or binding.
++	for (const auto& ctxSI : shaderConfig.shaderInputs) {
++		if (ctxSI.outIsUsedByShader && ctxSI.shaderVar.builtin == spv::BuiltInMax &&
++			std::find(boundLocations.begin(), boundLocations.end(), ctxSI.shaderVar.location) == boundLocations.end()) {
++			setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED,
++				"HB_DETROIT_STRICT_INTERFACE_V1: active vertex location %u has no Vulkan vertex attribute description; refusing a dummy Metal descriptor. Capture SPIR-V, specialization constants, and VkPipelineVertexInputStateCreateInfo.",
++				ctxSI.shaderVar.location));
++			return false;
+ 		}
+ 	}
+ 
+-	// If we had to use a buffer that wasn't already configured, make it safe.
+-	if (!foundUsedBuffer) {
+-		auto vbDesc = inputDesc.layouts[dummyBufferIndex];
+-		vbDesc.stride = 1; // Metal requires a non-zero stride
+-		vbDesc.stepFunction = (decltype(vbDesc.stepFunction))MTLStepFunctionConstant;
+-		vbDesc.stepRate = 0;
+-	}
+-
+ 	// Run through the vertex bindings. Add a new Metal vertex layout for each translated binding,
+ 	// identical to the original layout. The translated binding will index into the same MTLBuffer,
+ 	// but at an offset that is one or more strides away from the original.
+diff --git a/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp b/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp
+index ae305877..362752cd 100644
+--- a/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp
++++ b/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp
+@@ -397,11 +397,10 @@ MVK_PUBLIC_SYMBOL bool SPIRVToMSLConverter::convert(SPIRVToMSLConversionConfigur
+ 					}
+ 				}
+ 				if (!found) {
+-					MSLShaderInput si;
+-					si.shaderVar.location = i;
+-					si.binding = 0;
+-					si.outIsUsedByShader = true;
+-					shaderConfig.shaderInputs.push_back(si);
++					std::string msg = "HB_DETROIT_STRICT_INTERFACE_V1: SPIRV-Cross uses vertex location " + std::to_string(i) +
++						" without a supplied Vulkan input mapping (entry point " + shaderConfig.options.entryPointName + "). No synthetic binding was added.";
++					delete pMSLCompiler;
++					return logError(conversionResult.resultLog, msg.c_str());
+ 				}
+ 			}
+ 		}
+diff --git a/fetchDependencies b/fetchDependencies
+index cee348f7..62c7ff7e 100755
+--- a/fetchDependencies
++++ b/fetchDependencies
+@@ -336,7 +336,7 @@ if [ ! "$SPIRV_CROSS_ROOT" = "" ]; then
+ 	rm -rf ${REPO_NAME}
+ 	ln -sfn ${SPIRV_CROSS_ROOT} ${REPO_NAME}
+ else
+-	REPO_URL="https://github.com/KhronosGroup/${REPO_NAME}.git"
++	REPO_URL="https://github.com/alexdremov/${REPO_NAME}.git"
+ 	REPO_REV=$(cat "${EXT_REV_DIR}/${REPO_NAME}_repo_revision")
+ 
+ 	update_repo ${REPO_NAME} ${REPO_URL} ${REPO_REV}

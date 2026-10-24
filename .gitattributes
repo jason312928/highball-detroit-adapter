@@ -1,0 +1,5 @@
+# Preserve upstream patch context and vendored source verbatim.
+*.patch -whitespace
+licenses/** -whitespace
+src/include/** -whitespace
+vendor/** -whitespace

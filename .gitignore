@@ -1,0 +1,16 @@
+work/
+**/__pycache__/
+.DS_Store
+**/logs/
+**/build/
+**/candidate/
+*.dylib
+*.zip
+*.spv
+*.metallib
+*.log
+**/environment.json
+**/installation-status.json
+**/protected-files*.json
+engine-lock.local.json
+release/

@@ -1,0 +1,60 @@
+{
+  "date": "2026-10-24",
+  "highball": {
+    "url": "https://github.com/gauthierpiarrette/highball",
+    "tag": "v0.10.22",
+    "commit": "daa2095b9fd4abad0b9db7c57cacbd4d49a9e06e",
+    "observed_main": "bbada878d142521a3267f0818a09cd62111b5789",
+    "license": "GPL-3.0"
+  },
+  "moltenvk_detroit": {
+    "url": "https://github.com/DiAvisoo/MoltenVK-Detroit",
+    "tag": "Release003",
+    "commit": "8b511fdc5351a37c305bc246e161796ddca56b18",
+    "observed_main": "dc0028c933d6913947215a8a537af2998089b8d8",
+    "diff_base": "5843e5da2e1f561261cb06a2f859ad39663d054f",
+    "license": "Apache-2.0",
+    "binary_reported_commit": "3ea0f04572ca51b7c899d22846c1b2cfc7388a07",
+    "binary_tree_state": "dirty; exact release source not reconstructible from tag alone"
+  },
+  "spirv_cross": {
+    "url": "https://github.com/alexdremov/SPIRV-Cross",
+    "commit": "05583ac1537d777d304128142de2365bfa4a38df",
+    "base": "146679ff8255a6068518685599d7fb8761d1b570",
+    "archive_sha256": "73fcb848650b9786580dfc77342db60db846dd78ae6731bee2f6ad4e163ef794"
+  },
+  "release003": {
+    "url": "https://github.com/DiAvisoo/MoltenVK-Detroit/releases/download/Release003/Detroit-MoltenVK-unofficial-0.03.zip",
+    "github_digest": "sha256:1cc97945a03e7b0841a3304085ed14b8f4cc2664b8667a5b96ec23391e64789d",
+    "zip_sha256": "1cc97945a03e7b0841a3304085ed14b8f4cc2664b8667a5b96ec23391e64789d",
+    "dylib_sha256": "e736ba7881750333624f86b2253532f968f4dd67cc56fb91a24b9ab6134db386",
+    "usage": "probe-only; not installable under current constraints"
+  },
+  "patch": {
+    "path": "patches/0001-strict-interfaces-and-pinned-spirv.patch",
+    "sha256": "b293e222efacd3aa9ffc6d10bdf5d73b70831fca4060dcf419ab47ce40275e35"
+  },
+  "external_revisions": {
+    "Vulkan-Tools_repo_revision": "fe3764e18f0f743abb235bb2fda4efaa57ec3fe0",
+    "SPIRV-Headers_repo_revision": "126038020c2bd47efaa942ccc364ca5353ffccde",
+    "SPIRV-Cross_repo_revision": "05583ac1537d777d304128142de2365bfa4a38df",
+    "Volk_repo_revision": "3ca312a4f38baa63d8006b6905abbeeb89c8087d",
+    "Vulkan-Headers_repo_revision": "8864cdc896bbc2a9b6eb36b3218fc9ef57908d77",
+    "cereal_repo_revision": "a56bad8bbb770ee266e930c95d37fff2a5be7fea",
+    "SPIRV-Tools_repo_revision": "c8bda961df8dcdc07cdd6fc59dac3b35a4b73739"
+  },
+  "cmake_build": {
+    "cmake": "4.4.4",
+    "ninja": "1.13.2",
+    "architecture": "x86_64",
+    "spirv_tools_excluded": false,
+    "cereal_excluded": false,
+    "inputs": {
+      "work/cereal.tar.gz": "12e10fb541270632f6683286ce8c7e8c321fe4addb53fa91ed498b95c1758f93",
+      "work/spirv-tools.tar.gz": "cda700cdf8641d380e3f5fabddd5844bc979e1f0285206df2baddd7d6f3be8fa",
+      "work/spirv-headers.tar.gz": "5111b4a0b756575d5279787616b950b02b060c8f898ec32a23125bcefd0f1b07",
+      "work/vulkan-headers.tar.gz": "35824117f649befc664a12622bc801eddbba036ac03d906db400ee1c1e7903e9",
+      "work/CPM_0.40.8.cmake": "78ba32abdf798bc616bab7c73aac32a17bbd7b06ad9e26a6add69de8f3ae4791"
+    }
+  }
+}

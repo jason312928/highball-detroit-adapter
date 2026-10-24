@@ -1,0 +1,4381 @@
+diff --git a/.gitignore b/.gitignore
+index 83e91704..325df755 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -36,3 +36,5 @@ Backup[ ]of[ ]*.key/
+ Backup[ ]of[ ]*.numbers/
+ 
+ MoltenVKOptions.cmake
++
++.vscode
+diff --git a/ExternalRevisions/SPIRV-Cross_repo_revision b/ExternalRevisions/SPIRV-Cross_repo_revision
+index f3cbb5a7..ba2906d0 100644
+--- a/ExternalRevisions/SPIRV-Cross_repo_revision
++++ b/ExternalRevisions/SPIRV-Cross_repo_revision
+@@ -1 +1 @@
+-146679ff8255a6068518685599d7fb8761d1b570
++main
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
+index 664276bf..8e9a9f1f 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
+@@ -209,7 +209,8 @@
+         tempDrawIDBuff = cmdEncoder->getTempMTLBuffer(sizeof(uint32_t));
+ 
+         // We don't currently support non-indirect multi-draw commands, so just 0.
+-        memset([tempDrawIDBuff->_mtlBuffer contents], 0, sizeof(uint32_t));
++		uint32_t* pDrawID = (uint32_t*)((char*)[tempDrawIDBuff->_mtlBuffer contents] + tempDrawIDBuff->_offset);
++		*pDrawID = 0;
+     }
+     for (uint32_t s : stages) {
+         auto stage = MVKGraphicsStage(s);
+@@ -492,7 +493,8 @@
+         tempDrawIDBuff = cmdEncoder->getTempMTLBuffer(sizeof(uint32_t));
+ 
+         // We don't currently support non-indirect multi-draw commands, so just 0.
+-        memset([tempDrawIDBuff->_mtlBuffer contents], 0, sizeof(uint32_t));
++		uint32_t* pDrawID = (uint32_t*)((char*)[tempDrawIDBuff->_mtlBuffer contents] + tempDrawIDBuff->_offset);
++		*pDrawID = 0;
+     }
+     for (uint32_t s : stages) {
+         auto stage = MVKGraphicsStage(s);
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
+index 2e212645..762a44ad 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
+@@ -38,9 +38,15 @@
+ 
+ #include <sys/stat.h>
+ #include <cmath>
++#include <cstdlib>
++#include <cstring>
+ 
+ using namespace std;
+ 
++static bool mvkDTRForceArgumentEncodersEnabled() {
++	return false;
++}
++
+ 
+ #if MVK_MACOS
+ #	include <AppKit/AppKit.h>
+@@ -2684,6 +2690,14 @@
+ 	_metalFeatures.needsArgumentBufferEncoders = !(mvkOSVersionIsAtLeast(13.0, 16.0, 1.0) &&
+ 													supportsMTLGPUFamily(Metal3) &&
+ 													_metalFeatures.argumentBuffersTier >= MTLArgumentBuffersTier2);
++	if (mvkDTRForceArgumentEncodersEnabled()) {
++		if (_metalFeatures.descriptorSetArgumentBuffers) {
++			_metalFeatures.needsArgumentBufferEncoders = true;
++			MVKLogInfo("MVK-DTR-BINARY-ARCHIVE: forcing Metal argument encoders by MVK_DTR_FORCE_ARGUMENT_ENCODERS=1");
++		} else {
++			MVKLogInfo("MVK-DTR-BINARY-ARCHIVE: MVK_DTR_FORCE_ARGUMENT_ENCODERS=1 requested, but descriptor-set argument buffers are unavailable");
++		}
++	}
+ 
+ 	_isUsingMetalArgumentBuffers = _metalFeatures.descriptorSetArgumentBuffers && getMVKConfig().useMetalArgumentBuffers;
+ 
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKDeviceMemory.mm b/MoltenVK/MoltenVK/GPUObjects/MVKDeviceMemory.mm
+index e6e7786b..d61045f8 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKDeviceMemory.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKDeviceMemory.mm
+@@ -22,13 +22,36 @@
+ #include "MVKQueue.h"
+ #include "mvk_datatypes.hpp"
+ #include "MVKFoundation.h"
++#include <cstdarg>
++#include <cstdio>
+ #include <cstdlib>
++#include <exception>
++#include <mutex>
++#include <pthread.h>
+ #include <stdlib.h>
+ #include <os/lock.h>
+ 
+ using namespace std;
+ 
+ 
++[[maybe_unused]] static bool mvkDTRMemoryLogEnabled() {
++	return false;
++}
++
++[[maybe_unused]] static uint64_t mvkDTRCurrentThreadID() {
++	uint64_t tid = 0;
++	pthread_threadid_np(pthread_self(), &tid);
++	return tid;
++}
++
++[[maybe_unused]] static NSString* mvkDTRMemoryLogPath() {
++	return nil;
++}
++
++template<typename... Args> static inline void mvkDTRDiscardLogArgs(Args&&...) {}
++#define mvkDTRMemoryLog(...) do { if (false) { mvkDTRDiscardLogArgs(__VA_ARGS__); } } while (false)
++
++
+ #pragma mark MVKDeviceMemory
+ 
+ void MVKDeviceMemory::propagateDebugName() {
+@@ -172,7 +195,7 @@
+ 		return reportError(VK_ERROR_OUT_OF_DEVICE_MEMORY, "Could not bind VkImage %p to a VkDeviceMemory dedicated to resource %p. A dedicated allocation may only be used with the resource it was dedicated to.", mvkImg, getDedicatedResource() );
+ 	}
+ 
+-	if (!_isDedicated) { _imageMemoryBindings.push_back(mvkImg); }
++	if (!mvkContains(_imageMemoryBindings, mvkImg)) { _imageMemoryBindings.push_back(mvkImg); }
+ 
+ 	return VK_SUCCESS;
+ }
+@@ -181,8 +204,20 @@
+ 	os_unfair_lock_lock(&s_device_memory_destruction_lock);
+ 	if (MVKDeviceMemory* mem = *pMem) {
+ 		*pMem = nullptr;
+-		std::lock_guard<std::mutex> lock(mem->_rezLock);
+-		mvkRemoveAllOccurances(mem->_imageMemoryBindings, mvkImg);
++		@try {
++			try {
++				std::lock_guard<std::mutex> lock(mem->_rezLock);
++				mvkRemoveAllOccurances(mem->_imageMemoryBindings, mvkImg);
++			} catch (const std::exception& ex) {
++				mvkDTRMemoryLog("remove image memory binding exception mem=%p binding=%p what=%s", mem, mvkImg, ex.what());
++			} catch (...) {
++				mvkDTRMemoryLog("remove image memory binding unknown exception mem=%p binding=%p", mem, mvkImg);
++			}
++		} @catch (NSException* ex) {
++			NSString* exName = ex.name ?: @"";
++			NSString* exReason = ex.reason ?: @"";
++			mvkDTRMemoryLog("remove image memory binding objc exception mem=%p binding=%p name=%s reason=%s", mem, mvkImg, exName.UTF8String, exReason.UTF8String);
++		}
+ 	}
+ 	os_unfair_lock_unlock(&s_device_memory_destruction_lock);
+ }
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKImage.h b/MoltenVK/MoltenVK/GPUObjects/MVKImage.h
+index 928e0781..74e5a626 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKImage.h
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKImage.h
+@@ -346,6 +346,8 @@ public:
+ 
+ 	MVKImage(MVKDevice* device, const VkImageCreateInfo* pCreateInfo);
+ 
++	void destroy() override;
++
+ 	~MVKImage() override;
+ 
+ protected:
+@@ -362,6 +364,7 @@ protected:
+ 	uint32_t validateMipLevels(const VkImageCreateInfo* pCreateInfo, bool isAttachment);
+ 	bool validateLinear(const VkImageCreateInfo* pCreateInfo, bool isAttachment);
+ 	void initExternalMemory(VkExternalMemoryHandleTypeFlags handleTypes);
++	void detachMemory();
+     void releaseIOSurface();
+ 	bool getIsValidViewFormat(VkFormat viewFormat);
+ 	VkImageUsageFlags getCombinedUsage() { return _usage | _stencilUsage; }
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKImage.mm b/MoltenVK/MoltenVK/GPUObjects/MVKImage.mm
+index c617c021..2f9992e5 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKImage.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKImage.mm
+@@ -25,6 +25,11 @@
+ #include "MVKFoundation.h"
+ #include "MVKOSExtensions.h"
+ #include "MVKCodec.h"
++#include <cstdarg>
++#include <cstdio>
++#include <cstdlib>
++#include <mutex>
++#include <pthread.h>
+ 
+ #import "MTLSamplerDescriptor+MoltenVK.h"
+ #import "CAMetalLayer+MoltenVK.h"
+@@ -32,6 +37,62 @@
+ using namespace std;
+ using namespace SPIRV_CROSS_NAMESPACE;
+ 
++
++static bool mvkDTRSurfaceLogEnabled() {
++	return false;
++}
++
++[[maybe_unused]] static bool mvkDTRSurfaceLogAllImagesEnabled() {
++	return false;
++}
++
++static bool mvkDTRSkipPresentedHandlerEnabled() {
++	return false;
++}
++
++static bool mvkDTRLeakPresentCompletionObjectsEnabled() {
++	return false;
++}
++
++static bool mvkDTRRetainDrawableUntilPresentedEnabled() {
++	return false;
++}
++
++static bool mvkDTRSkipPresentCompletedHandlerEnabled() {
++	return false;
++}
++
++static bool mvkDTRSkipPresentScheduledHandlerEnabled() {
++	return false;
++}
++
++static bool mvkDTRCatchImageMemoryDtorExceptionsEnabled() {
++	return false;
++}
++
++[[maybe_unused]] static uint64_t mvkDTRCurrentThreadID() {
++	uint64_t tid = 0;
++	pthread_threadid_np(pthread_self(), &tid);
++	return tid;
++}
++
++static bool mvkDTRShouldSkipDrawablePresent(VkExtent2D extent) {
++	(void)extent;
++	return false;
++}
++
++[[maybe_unused]] static NSString* mvkDTRSurfaceLogPath() {
++	return nil;
++}
++
++template<typename... Args> static inline void mvkDTRDiscardLogArgs(Args&&...) {}
++#define mvkDTRSurfaceLog(...) do { if (false) { mvkDTRDiscardLogArgs(__VA_ARGS__); } } while (false)
++
++static bool mvkDTRShouldLogSwapchainImage(MVKSwapchain* swapchain) {
++	(void)swapchain;
++	return false;
++}
++
+ #pragma mark -
+ #pragma mark MVKImagePlane
+ 
+@@ -600,12 +661,60 @@
+ }
+ 
+ MVKImageMemoryBinding::~MVKImageMemoryBinding() {
+-	if (_deviceMemory) { MVKDeviceMemory::removeImageMemoryBinding(&_deviceMemory, this); }
++	bool catchExceptions = mvkDTRCatchImageMemoryDtorExceptionsEnabled();
++	mvkDTRSurfaceLog("image memory binding dtor begin binding=%p image=%p plane=%u memory=%p owns_texel=%u texel=%p offset=%llu bytes=%llu catch=%u",
++					 this, _image, _planeIndex, _deviceMemory, _ownsTexelBuffer ? 1 : 0, _mtlTexelBuffer,
++					 (unsigned long long)_mtlTexelBufferOffset, (unsigned long long)_byteCount, catchExceptions ? 1 : 0);
++	if (_deviceMemory) {
++		mvkDTRSurfaceLog("image memory binding dtor remove memory begin binding=%p memory=%p", this, _deviceMemory);
++		MVKDeviceMemory::removeImageMemoryBinding(&_deviceMemory, this);
++		mvkDTRSurfaceLog("image memory binding dtor remove memory end binding=%p memory=%p", this, _deviceMemory);
++	}
+ 	if (_ownsTexelBuffer) {
+-		_device->removeResidency(_mtlTexelBuffer);
+-		_device->getLiveResources().remove(_mtlTexelBuffer);
+-		[_mtlTexelBuffer release];
++		if (catchExceptions) {
++			@try {
++				mvkDTRSurfaceLog("image memory binding dtor remove residency begin binding=%p texel=%p", this, _mtlTexelBuffer);
++				_device->removeResidency(_mtlTexelBuffer);
++				mvkDTRSurfaceLog("image memory binding dtor remove residency end binding=%p texel=%p", this, _mtlTexelBuffer);
++			} @catch (NSException* ex) {
++				NSString* exName = ex.name ?: @"";
++				NSString* exReason = ex.reason ?: @"";
++				mvkDTRSurfaceLog("image memory binding dtor remove residency exception binding=%p texel=%p name=%s reason=%s",
++								 this, _mtlTexelBuffer, exName.UTF8String, exReason.UTF8String);
++			}
++			@try {
++				mvkDTRSurfaceLog("image memory binding dtor live remove begin binding=%p texel=%p", this, _mtlTexelBuffer);
++				_device->getLiveResources().remove(_mtlTexelBuffer);
++				mvkDTRSurfaceLog("image memory binding dtor live remove end binding=%p texel=%p", this, _mtlTexelBuffer);
++			} @catch (NSException* ex) {
++				NSString* exName = ex.name ?: @"";
++				NSString* exReason = ex.reason ?: @"";
++				mvkDTRSurfaceLog("image memory binding dtor live remove exception binding=%p texel=%p name=%s reason=%s",
++								 this, _mtlTexelBuffer, exName.UTF8String, exReason.UTF8String);
++			}
++			@try {
++				mvkDTRSurfaceLog("image memory binding dtor texel release begin binding=%p texel=%p", this, _mtlTexelBuffer);
++				[_mtlTexelBuffer release];
++				mvkDTRSurfaceLog("image memory binding dtor texel release end binding=%p texel=%p", this, _mtlTexelBuffer);
++			} @catch (NSException* ex) {
++				NSString* exName = ex.name ?: @"";
++				NSString* exReason = ex.reason ?: @"";
++				mvkDTRSurfaceLog("image memory binding dtor texel release exception binding=%p texel=%p name=%s reason=%s",
++								 this, _mtlTexelBuffer, exName.UTF8String, exReason.UTF8String);
++			}
++		} else {
++			mvkDTRSurfaceLog("image memory binding dtor remove residency begin binding=%p texel=%p", this, _mtlTexelBuffer);
++			_device->removeResidency(_mtlTexelBuffer);
++			mvkDTRSurfaceLog("image memory binding dtor remove residency end binding=%p texel=%p", this, _mtlTexelBuffer);
++			mvkDTRSurfaceLog("image memory binding dtor live remove begin binding=%p texel=%p", this, _mtlTexelBuffer);
++			_device->getLiveResources().remove(_mtlTexelBuffer);
++			mvkDTRSurfaceLog("image memory binding dtor live remove end binding=%p texel=%p", this, _mtlTexelBuffer);
++			mvkDTRSurfaceLog("image memory binding dtor texel release begin binding=%p texel=%p", this, _mtlTexelBuffer);
++			[_mtlTexelBuffer release];
++			mvkDTRSurfaceLog("image memory binding dtor texel release end binding=%p texel=%p", this, _mtlTexelBuffer);
++		}
+ 	}
++	mvkDTRSurfaceLog("image memory binding dtor end binding=%p image=%p", this, _image);
+ }
+ 
+ 
+@@ -1465,9 +1574,24 @@ static MTLRegion getMTLRegion(const ImgRgn& imgRgn) {
+ }
+ 
+ MVKImage::~MVKImage() {
++	mvkDTRSurfaceLog("image dtor begin image=%p bindings=%zu planes=%zu extent=%ux%ux%u format=%u usage=0x%x", this, _memoryBindings.size(), _planes.size(), _extent.width, _extent.height, _extent.depth, _vkFormat, _usage);
+ 	mvkDestroyContainerContents(_memoryBindings);
++	mvkDTRSurfaceLog("image dtor bindings destroyed image=%p", this);
+ 	mvkDestroyContainerContents(_planes);
++	mvkDTRSurfaceLog("image dtor planes destroyed image=%p", this);
+     releaseIOSurface();
++	mvkDTRSurfaceLog("image dtor end image=%p", this);
++}
++
++void MVKImage::destroy() {
++	detachMemory();
++	MVKVulkanAPIDeviceObject::destroy();
++}
++
++void MVKImage::detachMemory() {
++	for (auto& memoryBinding : _memoryBindings) {
++		if (memoryBinding->_deviceMemory) { MVKDeviceMemory::removeImageMemoryBinding(&memoryBinding->_deviceMemory, memoryBinding); }
++	}
+ }
+ 
+ 
+@@ -1540,6 +1664,11 @@ static void signalAndUntrack(const MVKSwapchainSignaler& signaler) {
+ }
+ 
+ VkResult MVKPresentableSwapchainImage::acquireAndSignalWhenAvailable(MVKSemaphore* semaphore, MVKFence* fence) {
++	if (mvkDTRShouldLogSwapchainImage(_swapchain)) {
++		VkExtent2D extent = _swapchain->getImageExtent();
++		mvkDTRSurfaceLog("acquire image begin image=%p swapchain=%p index=%u extent=%ux%u drawable=%p available=%u sem=%p fence=%p",
++						 this, _swapchain, _swapchainIndex, extent.width, extent.height, _mtlDrawable, _availability.isAvailable ? 1 : 0, semaphore, fence);
++	}
+ 
+ 	// Now that this image is being acquired, release the existing drawable and its texture.
+ 	// This is not done earlier so the texture is retained for any post-processing such as screen captures, etc.
+@@ -1576,7 +1705,12 @@ static void signalAndUntrack(const MVKSwapchainSignaler& signaler) {
+ 	}
+ 	track(signaler);
+ 
+-	return getConfigurationResult();
++	VkResult rslt = getConfigurationResult();
++	if (mvkDTRShouldLogSwapchainImage(_swapchain)) {
++		mvkDTRSurfaceLog("acquire image end image=%p swapchain=%p index=%u result=%d available=%u pending_signalers=%zu",
++						 this, _swapchain, _swapchainIndex, rslt, _availability.isAvailable ? 1 : 0, _availabilitySignalers.size());
++	}
++	return rslt;
+ }
+ 
+ // Calling nextDrawable may result in a nil drawable, or a drawable with no pixel format.
+@@ -1590,11 +1724,24 @@ static void signalAndUntrack(const MVKSwapchainSignaler& signaler) {
+ 		@autoreleasepool {
+ 			bool hasInvalidFormat = false;
+ 			uint32_t attemptCnt = _swapchain->getImageCount();	// Attempt a resonable number of times
++			if (mvkDTRShouldLogSwapchainImage(_swapchain)) {
++				VkExtent2D extent = _swapchain->getImageExtent();
++				CAMetalLayer* layer = _swapchain->getCAMetalLayer();
++				mvkDTRSurfaceLog("nextDrawable begin image=%p swapchain=%p index=%u extent=%ux%u layer=%p attempts=%u",
++							 this, _swapchain, _swapchainIndex, extent.width, extent.height, layer, attemptCnt);
++			}
+ 			for (uint32_t attemptIdx = 0; !_mtlDrawable && attemptIdx < attemptCnt; attemptIdx++) {
+ 				uint64_t startTime = getPerformanceTimestamp();
+ 				_mtlDrawable = [_swapchain->getCAMetalLayer().nextDrawable retain];	// retained
+ 				addPerformanceInterval(getPerformanceStats().queue.retrieveCAMetalDrawable, startTime);
+ 				hasInvalidFormat = _mtlDrawable && !_mtlDrawable.texture.pixelFormat;
++				if (mvkDTRShouldLogSwapchainImage(_swapchain)) {
++					id<MTLTexture> tex = _mtlDrawable.texture;
++					mvkDTRSurfaceLog("nextDrawable attempt image=%p swapchain=%p index=%u attempt=%u drawable=%p texture=%p tex_size=%zux%zu pixfmt=%llu invalid_format=%u elapsed_us=%.1f",
++								 this, _swapchain, _swapchainIndex, attemptIdx + 1, _mtlDrawable, tex, tex ? tex.width : 0, tex ? tex.height : 0,
++								 tex ? (unsigned long long)tex.pixelFormat : 0ULL, hasInvalidFormat ? 1 : 0,
++								 (double)getPerformanceTimestamp() - (double)startTime);
++				}
+ 				if (hasInvalidFormat) { releaseMetalDrawable(); }
+ 			}
+ 			if (hasInvalidFormat) {
+@@ -1615,7 +1762,18 @@ static void signalAndUntrack(const MVKSwapchainSignaler& signaler) {
+ // Present the drawable and make myself available only once the command buffer has completed.
+ // Pass MVKImagePresentInfo by value because it may not exist when the callback runs.
+ VkResult MVKPresentableSwapchainImage::presentCAMetalDrawable(id<MTLCommandBuffer> mtlCmdBuff,
+-															  MVKImagePresentInfo presentInfo) {
++											  MVKImagePresentInfo presentInfo) {
++	bool shouldLog = mvkDTRShouldLogSwapchainImage(_swapchain);
++	auto* loggedImage = this;
++	auto* loggedSwapchain = _swapchain;
++	uint32_t loggedIndex = _swapchainIndex;
++	VkExtent2D loggedExtent = {0, 0};
++	if (loggedSwapchain) { loggedExtent = loggedSwapchain->getImageExtent(); }
++	if (shouldLog) {
++		mvkDTRSurfaceLog("present begin image=%p swapchain=%p index=%u extent=%ux%u cmd=%p present_mode=%u present_id=%llu",
++						 loggedImage, loggedSwapchain, loggedIndex, loggedExtent.width, loggedExtent.height, mtlCmdBuff,
++						 presentInfo.presentMode, (unsigned long long)presentInfo.presentId);
++	}
+ 	_swapchain->renderWatermark(getMTLTexture(0), mtlCmdBuff);
+ 
+ 	// According to Apple, it is more performant to call MTLDrawable present from within a
+@@ -1623,22 +1781,51 @@ static void signalAndUntrack(const MVKSwapchainSignaler& signaler) {
+ 	// But get current drawable now, intead of in handler, because a new drawable might be acquired by then.
+ 	// Attach present handler before presenting to avoid race condition.
+ 	id<CAMetalDrawable> mtlDrwbl = getCAMetalDrawable();
++	if (shouldLog) {
++		id<MTLTexture> tex = mtlDrwbl.texture;
++		mvkDTRSurfaceLog("present drawable image=%p swapchain=%p index=%u drawable=%p layer=%p texture=%p tex_size=%zux%zu pixfmt=%llu",
++						 loggedImage, loggedSwapchain, loggedIndex, mtlDrwbl, mtlDrwbl.layer, tex, tex ? tex.width : 0, tex ? tex.height : 0,
++						 tex ? (unsigned long long)tex.pixelFormat : 0ULL);
++	}
+ 	MVKSwapchainSignaler signaler = getPresentationSignaler();
+-	[mtlCmdBuff addScheduledHandler: ^(id<MTLCommandBuffer> mcb) {
+-
+-		addPresentedHandler(mtlDrwbl, presentInfo, signaler);
++	bool skipPresentedHandler = mvkDTRSkipPresentedHandlerEnabled();
++	bool skipDrawablePresent = mvkDTRShouldSkipDrawablePresent(loggedExtent);
++	bool leakPresentCompletionObjects = mvkDTRLeakPresentCompletionObjectsEnabled();
++	bool skipPresentCompletedHandler = skipDrawablePresent && mvkDTRSkipPresentCompletedHandlerEnabled();
++	bool skipPresentScheduledHandler = skipDrawablePresent && mvkDTRSkipPresentScheduledHandlerEnabled();
++	if (skipPresentScheduledHandler) {
++		if (shouldLog) { mvkDTRSurfaceLog("present scheduled handler add skipped image=%p swapchain=%p index=%u drawable=%p", loggedImage, loggedSwapchain, loggedIndex, mtlDrwbl); }
++	} else {
++		[mtlCmdBuff addScheduledHandler: ^(id<MTLCommandBuffer> mcb) {
++		if (shouldLog) {
++			mvkDTRSurfaceLog("present scheduled image=%p swapchain=%p index=%u extent=%ux%u cmd=%p status=%lu drawable=%p layer=%p",
++							 loggedImage, loggedSwapchain, loggedIndex, loggedExtent.width, loggedExtent.height, mcb,
++							 (unsigned long)mcb.status, mtlDrwbl, mtlDrwbl.layer);
++		}
+ 
+-		// Try to do any present mode transitions as late as possible in an attempt
+-		// to avoid visual disruptions on any presents already on the queue.
+-		if (presentInfo.presentMode != VK_PRESENT_MODE_MAX_ENUM_KHR) {
+-			mtlDrwbl.layer.displaySyncEnabledMVK = (presentInfo.presentMode != VK_PRESENT_MODE_IMMEDIATE_KHR);
++		if (skipPresentedHandler) {
++			if (shouldLog) { mvkDTRSurfaceLog("presented handler skipped image=%p swapchain=%p index=%u drawable=%p", loggedImage, loggedSwapchain, loggedIndex, mtlDrwbl); }
++			beginPresentation(presentInfo);
++		} else {
++			addPresentedHandler(mtlDrwbl, presentInfo, signaler);
+ 		}
+-		if (presentInfo.desiredPresentTime) {
+-			[mtlDrwbl presentAtTime: (double)presentInfo.desiredPresentTime * 1.0e-9];
++
++		if (skipDrawablePresent) {
++			if (shouldLog) { mvkDTRSurfaceLog("drawable present skipped image=%p swapchain=%p index=%u drawable=%p", loggedImage, loggedSwapchain, loggedIndex, mtlDrwbl); }
+ 		} else {
+-			[mtlDrwbl present];
++			// Try to do any present mode transitions as late as possible in an attempt
++			// to avoid visual disruptions on any presents already on the queue.
++			if (presentInfo.presentMode != VK_PRESENT_MODE_MAX_ENUM_KHR) {
++				mtlDrwbl.layer.displaySyncEnabledMVK = (presentInfo.presentMode != VK_PRESENT_MODE_IMMEDIATE_KHR);
++			}
++			if (presentInfo.desiredPresentTime) {
++				[mtlDrwbl presentAtTime: (double)presentInfo.desiredPresentTime * 1.0e-9];
++			} else {
++				[mtlDrwbl present];
++			}
+ 		}
+-	}];
++		}];
++	}
+ 
+ 	// Ensure this image, the drawable, and the present fence are not destroyed while
+ 	// awaiting MTLCommandBuffer completion. We retain the drawable separately because
+@@ -1650,13 +1837,57 @@ static void signalAndUntrack(const MVKSwapchainSignaler& signaler) {
+ 	[mtlDrwbl retain];
+ 	auto* fence = presentInfo.fence;
+ 	if (fence) { fence->retain(); }
+-	[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mcb) {
++	if (skipPresentCompletedHandler) {
++		if (shouldLog) { mvkDTRSurfaceLog("present completed handler add skipped image=%p swapchain=%p index=%u drawable=%p", loggedImage, loggedSwapchain, loggedIndex, mtlDrwbl); }
++	} else {
++		[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mcb) {
++		if (shouldLog) {
++			NSString* errDesc = mcb.error.localizedDescription ?: @"";
++			mvkDTRSurfaceLog("present completed image=%p swapchain=%p index=%u extent=%ux%u cmd=%p status=%lu error=%s drawable=%p",
++							 loggedImage, loggedSwapchain, loggedIndex, loggedExtent.width, loggedExtent.height, mcb,
++							 (unsigned long)mcb.status, errDesc.UTF8String, mtlDrwbl);
++		}
++		if (skipPresentedHandler) {
++			if (shouldLog) { mvkDTRSurfaceLog("present completed synthetic presentation begin image=%p swapchain=%p index=%u", loggedImage, loggedSwapchain, loggedIndex); }
++			endPresentation(presentInfo, signaler);
++			if (shouldLog) { mvkDTRSurfaceLog("present completed synthetic presentation end image=%p swapchain=%p index=%u", loggedImage, loggedSwapchain, loggedIndex); }
++		}
++		if (shouldLog) { mvkDTRSurfaceLog("present completed fence signal begin image=%p swapchain=%p index=%u fence=%p", loggedImage, loggedSwapchain, loggedIndex, fence); }
+ 		signal(fence);
+-		if (fence) { fence->release(); }
+-		[mtlDrwbl release];
+-		release();
+-		if (_swapchain) { _swapchain->notifyPresentComplete(presentInfo); }
+-	}];
++		if (fence) {
++			if (leakPresentCompletionObjects) {
++				if (shouldLog) { mvkDTRSurfaceLog("present completed fence release skipped leak image=%p swapchain=%p index=%u fence=%p", loggedImage, loggedSwapchain, loggedIndex, fence); }
++			} else {
++				fence->release();
++			}
++		}
++		if (shouldLog) { mvkDTRSurfaceLog("present completed fence signal end image=%p swapchain=%p index=%u", loggedImage, loggedSwapchain, loggedIndex); }
++		{
++			lock_guard<mutex> lock(_detachmentLock);
++			if (_swapchain) {
++				if (shouldLog) { mvkDTRSurfaceLog("present completed notify begin image=%p swapchain=%p index=%u", loggedImage, _swapchain, loggedIndex); }
++				_swapchain->notifyPresentComplete(presentInfo);
++				if (shouldLog) { mvkDTRSurfaceLog("present completed notify end image=%p swapchain=%p index=%u", loggedImage, _swapchain, loggedIndex); }
++			} else if (shouldLog) {
++				mvkDTRSurfaceLog("present completed notify skipped detached image=%p logged_swapchain=%p index=%u", loggedImage, loggedSwapchain, loggedIndex);
++			}
++		}
++		if (shouldLog) { mvkDTRSurfaceLog("present completed drawable release begin image=%p swapchain=%p index=%u drawable=%p", loggedImage, loggedSwapchain, loggedIndex, mtlDrwbl); }
++		if (leakPresentCompletionObjects) {
++			if (shouldLog) { mvkDTRSurfaceLog("present completed drawable release skipped leak image=%p swapchain=%p index=%u drawable=%p", loggedImage, loggedSwapchain, loggedIndex, mtlDrwbl); }
++		} else {
++			[mtlDrwbl release];
++			if (shouldLog) { mvkDTRSurfaceLog("present completed drawable release end image=%p swapchain=%p index=%u", loggedImage, loggedSwapchain, loggedIndex); }
++		}
++		if (shouldLog) { mvkDTRSurfaceLog("present completed image release begin image=%p swapchain=%p index=%u", loggedImage, loggedSwapchain, loggedIndex); }
++		if (leakPresentCompletionObjects) {
++			if (shouldLog) { mvkDTRSurfaceLog("present completed image release skipped leak image=%p swapchain=%p index=%u", loggedImage, loggedSwapchain, loggedIndex); }
++		} else {
++			release();
++			if (shouldLog) { mvkDTRSurfaceLog("present completed image release end image=%p swapchain=%p index=%u", loggedImage, loggedSwapchain, loggedIndex); }
++		}
++		}];
++	}
+ 
+ 	signal(signaler.semaphore, signaler.semaphoreSignalToken, mtlCmdBuff);
+ 
+@@ -1687,23 +1918,54 @@ static void signalAndUntrack(const MVKSwapchainSignaler& signaler) {
+ 
+ // Pass MVKImagePresentInfo & MVKSwapchainSignaler by value because they may not exist when the callback runs.
+ void MVKPresentableSwapchainImage::addPresentedHandler(id<CAMetalDrawable> mtlDrawable,
+-													   MVKImagePresentInfo presentInfo,
+-													   MVKSwapchainSignaler signaler) {
++											   MVKImagePresentInfo presentInfo,
++											   MVKSwapchainSignaler signaler) {
++	bool shouldLog = mvkDTRShouldLogSwapchainImage(_swapchain);
++	auto* loggedImage = this;
++	auto* loggedSwapchain = _swapchain;
++	uint32_t loggedIndex = _swapchainIndex;
++	VkExtent2D loggedExtent = {0, 0};
++	if (loggedSwapchain) { loggedExtent = loggedSwapchain->getImageExtent(); }
++	bool retainDrawableUntilPresented = mvkDTRRetainDrawableUntilPresentedEnabled();
+ 	beginPresentation(presentInfo);
++	if (retainDrawableUntilPresented) {
++		[mtlDrawable retain];
++		if (shouldLog) { mvkDTRSurfaceLog("presented handler retain drawable image=%p swapchain=%p index=%u drawable=%p", loggedImage, loggedSwapchain, loggedIndex, mtlDrawable); }
++	}
+ 
+ #if !MVK_OS_SIMULATOR
+ 	[mtlDrawable addPresentedHandler: ^(id<MTLDrawable> mtlDrwbl) {
++		if (shouldLog) {
++			mvkDTRSurfaceLog("presented handler begin image=%p swapchain=%p index=%u extent=%ux%u drawable=%p presented_time=%.9f",
++						 loggedImage, loggedSwapchain, loggedIndex, loggedExtent.width, loggedExtent.height,
++						 mtlDrwbl, mtlDrwbl.presentedTime);
++		}
+ 		endPresentation(presentInfo, signaler, mtlDrwbl.presentedTime * 1.0e9);
++		if (retainDrawableUntilPresented) {
++			if (shouldLog) { mvkDTRSurfaceLog("presented handler release retained drawable image=%p swapchain=%p index=%u drawable=%p", loggedImage, loggedSwapchain, loggedIndex, mtlDrwbl); }
++			[mtlDrwbl release];
++		}
++		if (shouldLog) { mvkDTRSurfaceLog("presented handler end image=%p swapchain=%p index=%u", loggedImage, loggedSwapchain, loggedIndex); }
+ 	}];
+ #else
+ 	// If MTLDrawable.presentedTime/addPresentedHandler isn't supported,
+ 	// treat it as if the present happened when requested.
+ 	endPresentation(presentInfo, signaler);
++	if (retainDrawableUntilPresented) {
++		if (shouldLog) { mvkDTRSurfaceLog("presented handler simulator release retained drawable image=%p swapchain=%p index=%u drawable=%p", loggedImage, loggedSwapchain, loggedIndex, mtlDrawable); }
++		[mtlDrawable release];
++	}
+ #endif
+ }
+ 
+ // Ensure this image and the swapchain are not destroyed while awaiting presentation
+ void MVKPresentableSwapchainImage::beginPresentation(const MVKImagePresentInfo& presentInfo) {
++	if (mvkDTRShouldLogSwapchainImage(_swapchain)) {
++		VkExtent2D extent = _swapchain->getImageExtent();
++		mvkDTRSurfaceLog("presentation begin image=%p swapchain=%p index=%u extent=%ux%u present_mode=%u present_id=%llu",
++						 this, _swapchain, _swapchainIndex, extent.width, extent.height,
++						 presentInfo.presentMode, (unsigned long long)presentInfo.presentId);
++	}
+ 	retain();
+ 	_swapchain->beginPresentation(presentInfo);
+ 	_beginPresentTime = mvkGetRuntimeNanoseconds();
+@@ -1711,9 +1973,8 @@ static void signalAndUntrack(const MVKSwapchainSignaler& signaler) {
+ }
+ 
+ void MVKPresentableSwapchainImage::endPresentation(const MVKImagePresentInfo& presentInfo,
+-												   const MVKSwapchainSignaler& signaler,
+-												   uint64_t actualPresentTime) {
+-
++									   const MVKSwapchainSignaler& signaler,
++									   uint64_t actualPresentTime) {
+ 	// If the presentation time is not available, use the current nanosecond runtime clock,
+ 	// which should be reasonably accurate (sub-ms) to the presentation time. The presentation
+ 	// time will not be available if the presentation did not actually happen, such as when
+@@ -1724,19 +1985,50 @@ static void signalAndUntrack(const MVKSwapchainSignaler& signaler) {
+ 		// If I have become detached from the swapchain, it means the swapchain, and possibly the
+ 		// VkDevice, have been destroyed by the time of this callback, so do not reference them.
+ 		lock_guard<mutex> lock(_detachmentLock);
++		if (mvkDTRShouldLogSwapchainImage(_swapchain)) {
++			VkExtent2D extent = _swapchain->getImageExtent();
++			mvkDTRSurfaceLog("presentation end image=%p swapchain=%p index=%u extent=%ux%u present_id=%llu actual_time=%llu sem=%p fence=%p",
++							 this, _swapchain, _swapchainIndex, extent.width, extent.height,
++							 (unsigned long long)presentInfo.presentId, (unsigned long long)actualPresentTime,
++							 signaler.semaphore, signaler.fence);
++		}
+ 		if (_device) { addPerformanceInterval(getPerformanceStats().queue.presentSwapchains, _presentationStartTime); }
+-		if (_swapchain) { _swapchain->endPresentation(presentInfo, _beginPresentTime, actualPresentTime); }
++		if (_swapchain) {
++			_swapchain->endPresentation(presentInfo, _beginPresentTime, actualPresentTime);
++			if (mvkDTRShouldLogSwapchainImage(_swapchain)) {
++				mvkDTRSurfaceLog("presentation end swapchain returned image=%p swapchain=%p index=%u", this, _swapchain, _swapchainIndex);
++			}
++		}
+ 	}
+ 
+ 	// Makes an image available for acquisition by the app.
+ 	// If any semaphores are waiting to be signaled when this image becomes available, the
+ 	// earliest semaphore is signaled, and this image remains unavailable for other uses.
++	bool shouldLog = mvkDTRSurfaceLogEnabled();
++	auto* loggedImage = this;
++	uint64_t loggedPresentId = presentInfo.presentId;
++	bool leakPresentCompletionObjects = mvkDTRLeakPresentCompletionObjectsEnabled();
++	if (shouldLog) { mvkDTRSurfaceLog("presentation end signal begin image=%p present_id=%llu sem=%p fence=%p", loggedImage, (unsigned long long)loggedPresentId, signaler.semaphore, signaler.fence); }
+ 	signalAndUntrack(signaler);
+-	release();
++	if (shouldLog) { mvkDTRSurfaceLog("presentation end signal end image=%p present_id=%llu", loggedImage, (unsigned long long)loggedPresentId); }
++	if (shouldLog) { mvkDTRSurfaceLog("presentation end image release begin image=%p present_id=%llu", loggedImage, (unsigned long long)loggedPresentId); }
++	if (leakPresentCompletionObjects) {
++		if (shouldLog) { mvkDTRSurfaceLog("presentation end image release skipped leak image=%p present_id=%llu", loggedImage, (unsigned long long)loggedPresentId); }
++	} else {
++		release();
++		if (shouldLog) { mvkDTRSurfaceLog("presentation end image release end image=%p present_id=%llu", loggedImage, (unsigned long long)loggedPresentId); }
++	}
+ }
+ 
+ // Releases the CAMetalDrawable underlying this image.
+ void MVKPresentableSwapchainImage::releaseMetalDrawable() {
++	if (_mtlDrawable && mvkDTRShouldLogSwapchainImage(_swapchain)) {
++		id<MTLTexture> tex = _mtlDrawable.texture;
++		VkExtent2D extent = _swapchain->getImageExtent();
++		mvkDTRSurfaceLog("release drawable image=%p swapchain=%p index=%u extent=%ux%u drawable=%p layer=%p texture=%p tex_size=%zux%zu pixfmt=%llu",
++						 this, _swapchain, _swapchainIndex, extent.width, extent.height, _mtlDrawable, _mtlDrawable.layer, tex,
++						 tex ? tex.width : 0, tex ? tex.height : 0, tex ? (unsigned long long)tex.pixelFormat : 0ULL);
++	}
+     [_mtlDrawable release];
+ 	_mtlDrawable = nil;
+ }
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h
+index e385e9bd..9b7d0a05 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h
+@@ -349,7 +349,7 @@ protected:
+     MTLComputePipelineDescriptor* newMTLTessVertexStageDescriptor(const VkGraphicsPipelineCreateInfo* pCreateInfo, const mvk::SPIRVTessReflectionData& reflectData, mvk::SPIRVToMSLConversionConfiguration& shaderConfig, const VkPipelineShaderStageCreateInfo* pVertexSS, VkPipelineCreationFeedback* pVertexFB, const VkPipelineShaderStageCreateInfo* pTessCtlSS, MVKMTLFunction* pVtxFunctions);
+ 	MTLComputePipelineDescriptor* newMTLTessControlStageDescriptor(const VkGraphicsPipelineCreateInfo* pCreateInfo, const mvk::SPIRVTessReflectionData& reflectData, mvk::SPIRVToMSLConversionConfiguration& shaderConfig, const VkPipelineShaderStageCreateInfo* pTessCtlSS, VkPipelineCreationFeedback* pTessCtlFB, const VkPipelineShaderStageCreateInfo* pVertexSS, const VkPipelineShaderStageCreateInfo* pTessEvalSS);
+ 	MTLRenderPipelineDescriptor* newMTLTessRasterStageDescriptor(const VkGraphicsPipelineCreateInfo* pCreateInfo, const mvk::SPIRVTessReflectionData& reflectData, mvk::SPIRVToMSLConversionConfiguration& shaderConfig, const VkPipelineShaderStageCreateInfo* pTessEvalSS, VkPipelineCreationFeedback* pTessEvalFB, const VkPipelineShaderStageCreateInfo* pFragmentSS, VkPipelineCreationFeedback* pFragmentFB, const VkPipelineShaderStageCreateInfo* pTessCtlSS);
+-	bool addVertexShaderToPipeline(MTLRenderPipelineDescriptor* plDesc, const VkGraphicsPipelineCreateInfo* pCreateInfo, mvk::SPIRVToMSLConversionConfiguration& shaderConfig, const VkPipelineShaderStageCreateInfo* pVertexSS, VkPipelineCreationFeedback* pVertexFB, const VkPipelineShaderStageCreateInfo*& pFragmentSS);
++	bool addVertexShaderToPipeline(MTLRenderPipelineDescriptor* plDesc, const VkGraphicsPipelineCreateInfo* pCreateInfo, mvk::SPIRVToMSLConversionConfiguration& shaderConfig, SPIRVShaderOutputs& vtxOutputs, const VkPipelineShaderStageCreateInfo* pVertexSS, VkPipelineCreationFeedback* pVertexFB, const VkPipelineShaderStageCreateInfo*& pFragmentSS);
+ 	bool addVertexShaderToPipeline(MTLComputePipelineDescriptor* plDesc, const VkGraphicsPipelineCreateInfo* pCreateInfo, mvk::SPIRVToMSLConversionConfiguration& shaderConfig, SPIRVShaderInputs& nextInputs, const VkPipelineShaderStageCreateInfo* pVertexSS, VkPipelineCreationFeedback* pVertexFB, MVKMTLFunction* pVtxFunctions);
+ 	bool addTessCtlShaderToPipeline(MTLComputePipelineDescriptor* plDesc, const VkGraphicsPipelineCreateInfo* pCreateInfo, mvk::SPIRVToMSLConversionConfiguration& shaderConfig, SPIRVShaderOutputs& prevOutput, SPIRVShaderInputs& nextInputs, const VkPipelineShaderStageCreateInfo* pTessCtlSS, VkPipelineCreationFeedback* pTessCtlFB);
+ 	bool addTessEvalShaderToPipeline(MTLRenderPipelineDescriptor* plDesc, const VkGraphicsPipelineCreateInfo* pCreateInfo, mvk::SPIRVToMSLConversionConfiguration& shaderConfig, SPIRVShaderOutputs& prevOutput, const VkPipelineShaderStageCreateInfo* pTessEvalSS, VkPipelineCreationFeedback* pTessEvalFB, const VkPipelineShaderStageCreateInfo*& pFragmentSS);
+@@ -358,7 +358,7 @@ protected:
+ 	bool addVertexInputToPipeline(T* inputDesc, const VkPipelineVertexInputStateCreateInfo* pVI, const mvk::SPIRVToMSLConversionConfiguration& shaderConfig);
+ 	void adjustVertexInputForMultiview(MTLVertexDescriptor* inputDesc, const VkPipelineVertexInputStateCreateInfo* pVI, uint32_t viewCount, uint32_t oldViewCount = 1);
+     void addTessellationToPipeline(MTLRenderPipelineDescriptor* plDesc, const mvk::SPIRVTessReflectionData& reflectData, const VkPipelineTessellationStateCreateInfo* pTS);
+-    void addFragmentOutputToPipeline(MTLRenderPipelineDescriptor* plDesc, const VkGraphicsPipelineCreateInfo* pCreateInfo);
++    void addFragmentOutputToPipeline(MTLRenderPipelineDescriptor* plDesc, const VkGraphicsPipelineCreateInfo* pCreateInfo, SPIRVShaderOutputs& fragOutputs);
+     bool isRenderingPoints();
+     bool isRasterizationDisabled(const VkGraphicsPipelineCreateInfo* pCreateInfo);
+     bool isDepthClipNegativeOneToOne(const VkGraphicsPipelineCreateInfo* pCreateInfo);
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+index c461c291..f34f077a 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+@@ -26,6 +26,10 @@
+ #include "MTLRenderPipelineDescriptor+MoltenVK.h"
+ #include "mvk_datatypes.hpp"
+ #include <sys/stat.h>
++#include <atomic>
++#include <cstdarg>
++#include <cstdlib>
++#include <limits.h>
+ #include <sstream>
+ 
+ #ifndef MVK_USE_CEREAL
+@@ -43,6 +47,539 @@
+ using namespace mvk;
+ using namespace SPIRV_CROSS_NAMESPACE;
+ 
++#if 0
++#define MVK_DTR_BINARY_ARCHIVE_LOG_PREFIX "MVK-DTR-BINARY-ARCHIVE: "
++#define MVK_DTR_BINARY_ARCHIVE_SERIALIZE_INTERVAL 500
++
++[[maybe_unused]] static NSString* mvkDTRBinaryArchiveLogPath() {
++	return nil;
++}
++
++#define MVK_DTR_BINARY_ARCHIVE_LOG_INFO(fmt, ...) \
++	((void)0)
++
++#define MVK_DTR_BINARY_ARCHIVE_LOG_WARN(fmt, ...) \
++	((void)0)
++
++#define MVK_DTR_SHADER_CACHE_LOG_INTERVAL 100
++#define MVK_DTR_SHADER_CACHE_LOCK_WAIT_NS 1000000ULL
++
++static const char* mvkDTRShaderStageName(spv::ExecutionModel stage) {
++	switch (stage) {
++		case spv::ExecutionModelVertex: return "vertex";
++		case spv::ExecutionModelTessellationControl: return "tess-control";
++		case spv::ExecutionModelTessellationEvaluation: return "tess-eval";
++		case spv::ExecutionModelFragment: return "fragment";
++		case spv::ExecutionModelGLCompute: return "compute";
++		default: return "unknown";
++	}
++}
++
++static bool mvkDTRShaderCacheConcurrentCompileEnabled() {
++	return true;
++}
++
++static bool mvkDTRArgumentBufferNoPaddingEnabled() {
++	return false;
++}
++
++class MVKDTRShaderCacheDiagnostics {
++public:
++	static MVKDTRShaderCacheDiagnostics& get() {
++		static MVKDTRShaderCacheDiagnostics diag;
++		return diag;
++	}
++
++	void recordHit(const MVKShaderModuleKey& smKey, const SPIRVToMSLConversionConfiguration* pContext) {
++		if ( !_enabled ) { return; }
++		uint64_t count = _hits.fetch_add(1, memory_order_relaxed) + 1;
++		if (_verbose || count == 1 || count % (MVK_DTR_SHADER_CACHE_LOG_INTERVAL * 5) == 0) {
++			logSummary("shader cache hit", count, smKey, pContext, 0, 0);
++		}
++	}
++
++	void recordMiss(const MVKShaderModuleKey& smKey, const SPIRVToMSLConversionConfiguration* pContext, size_t cacheEntries) {
++		if ( !_enabled ) { return; }
++		uint64_t count = _misses.fetch_add(1, memory_order_relaxed) + 1;
++		if (_verbose || count == 1 || count % MVK_DTR_SHADER_CACHE_LOG_INTERVAL == 0) {
++			logSummary("shader cache miss", count, smKey, pContext, cacheEntries, 0);
++		}
++	}
++
++	void recordCompiled(const MVKShaderModuleKey& smKey,
++						const SPIRVToMSLConversionConfiguration* pContext,
++						uint64_t compileNanos,
++						size_t cacheEntries) {
++		if ( !_enabled ) { return; }
++		uint64_t count = _compiles.fetch_add(1, memory_order_relaxed) + 1;
++		uint64_t totalNanos = _compileNanos.fetch_add(compileNanos, memory_order_relaxed) + compileNanos;
++		if (_verbose || count == 1 || count % MVK_DTR_SHADER_CACHE_LOG_INTERVAL == 0) {
++			MVK_DTR_BINARY_ARCHIVE_LOG_INFO("shader cache compiled #%llu stage=%s entry=%s module=%016zx compile=%.1fms avg=%.1fms cache_entries=%zu hits=%llu misses=%llu duplicates=%llu",
++										 (unsigned long long)count,
++										 mvkDTRShaderStageName(pContext->options.entryPointStage),
++										 pContext->options.entryPointName.c_str(),
++										 smKey.codeHash,
++										 (double)compileNanos / 1e6,
++										 ((double)totalNanos / (double)count) / 1e6,
++										 cacheEntries,
++										 (unsigned long long)_hits.load(memory_order_relaxed),
++										 (unsigned long long)_misses.load(memory_order_relaxed),
++										 (unsigned long long)_duplicates.load(memory_order_relaxed));
++		}
++	}
++
++	void recordDuplicate(const MVKShaderModuleKey& smKey,
++						 const SPIRVToMSLConversionConfiguration* pContext,
++						 uint64_t compileNanos) {
++		if ( !_enabled ) { return; }
++		uint64_t count = _duplicates.fetch_add(1, memory_order_relaxed) + 1;
++		if (_verbose || count == 1 || count % MVK_DTR_SHADER_CACHE_LOG_INTERVAL == 0) {
++			MVK_DTR_BINARY_ARCHIVE_LOG_INFO("shader cache duplicate compile #%llu stage=%s entry=%s module=%016zx discarded_after=%.1fms",
++										 (unsigned long long)count,
++										 mvkDTRShaderStageName(pContext->options.entryPointStage),
++										 pContext->options.entryPointName.c_str(),
++										 smKey.codeHash,
++										 (double)compileNanos / 1e6);
++		}
++	}
++
++	void recordLockWait(uint64_t waitNanos) {
++		if ( !_enabled || waitNanos < MVK_DTR_SHADER_CACHE_LOCK_WAIT_NS ) { return; }
++		uint64_t count = _lockWaits.fetch_add(1, memory_order_relaxed) + 1;
++		uint64_t totalNanos = _lockWaitNanos.fetch_add(waitNanos, memory_order_relaxed) + waitNanos;
++		if (_verbose || count <= 10 || count % MVK_DTR_SHADER_CACHE_LOG_INTERVAL == 0) {
++			MVK_DTR_BINARY_ARCHIVE_LOG_INFO("shader cache lock wait #%llu wait=%.1fms avg=%.1fms",
++										 (unsigned long long)count,
++										 (double)waitNanos / 1e6,
++										 ((double)totalNanos / (double)count) / 1e6);
++		}
++	}
++
++	void recordCompileSkipped(const MVKShaderModuleKey& smKey, const SPIRVToMSLConversionConfiguration* pContext) {
++		if ( !_enabled ) { return; }
++		uint64_t count = _skipped.fetch_add(1, memory_order_relaxed) + 1;
++		if (_verbose || count == 1 || count % MVK_DTR_SHADER_CACHE_LOG_INTERVAL == 0) {
++			logSummary("shader cache compile skipped", count, smKey, pContext, 0, 0);
++		}
++	}
++
++private:
++	MVKDTRShaderCacheDiagnostics() {
++		_enabled = false;
++		_verbose = false;
++	}
++
++	void logSummary(const char* label,
++					uint64_t count,
++					const MVKShaderModuleKey& smKey,
++					const SPIRVToMSLConversionConfiguration* pContext,
++					size_t cacheEntries,
++					uint64_t extraNanos) {
++		MVK_DTR_BINARY_ARCHIVE_LOG_INFO("%s #%llu stage=%s entry=%s module=%016zx cache_entries=%zu hits=%llu misses=%llu compiles=%llu skipped=%llu extra=%.1fms",
++								 label,
++								 (unsigned long long)count,
++								 mvkDTRShaderStageName(pContext->options.entryPointStage),
++								 pContext->options.entryPointName.c_str(),
++								 smKey.codeHash,
++								 cacheEntries,
++								 (unsigned long long)_hits.load(memory_order_relaxed),
++								 (unsigned long long)_misses.load(memory_order_relaxed),
++								 (unsigned long long)_compiles.load(memory_order_relaxed),
++								 (unsigned long long)_skipped.load(memory_order_relaxed),
++								 (double)extraNanos / 1e6);
++	}
++
++	bool _enabled = false;
++	bool _verbose = false;
++	atomic<uint64_t> _hits{0};
++	atomic<uint64_t> _misses{0};
++	atomic<uint64_t> _compiles{0};
++	atomic<uint64_t> _duplicates{0};
++	atomic<uint64_t> _skipped{0};
++	atomic<uint64_t> _lockWaits{0};
++	atomic<uint64_t> _lockWaitNanos{0};
++	atomic<uint64_t> _compileNanos{0};
++};
++
++class MVKDTRBinaryArchiveManager {
++public:
++	static MVKDTRBinaryArchiveManager& get() {
++		static MVKDTRBinaryArchiveManager mgr;
++		return mgr;
++	}
++
++	void attach(MTLRenderPipelineDescriptor* plDesc, id<MTLDevice> mtlDev) {
++		if ( !_enabled || !_enableRender || !plDesc || !mtlDev || isRenderAttachDisabled() ) { return; }
++
++#if MVK_MACOS_OR_IOS
++		if (@available(macOS 11.0, iOS 14.0, *)) {
++			id<MTLBinaryArchive> archive = newRetainedArchive(mtlDev);
++			if ( !archive ) { return; }
++
++			plDesc.binaryArchives = [NSArray arrayWithObject: archive];
++			markAttached("render");
++			[archive release];
++		} else {
++			logUnavailableOnce();
++		}
++#else
++		logUnavailableOnce();
++#endif
++	}
++
++	void attach(MTLComputePipelineDescriptor* plDesc, id<MTLDevice> mtlDev) {
++		if ( !_enabled || !_enableCompute || !plDesc || !mtlDev || isComputeAttachDisabled() ) { return; }
++
++#if MVK_MACOS_OR_IOS
++		if (@available(macOS 11.0, iOS 14.0, *)) {
++			id<MTLBinaryArchive> archive = newRetainedArchive(mtlDev);
++			if ( !archive ) { return; }
++
++			plDesc.binaryArchives = [NSArray arrayWithObject: archive];
++			markAttached("compute");
++			[archive release];
++		} else {
++			logUnavailableOnce();
++		}
++#else
++		logUnavailableOnce();
++#endif
++	}
++
++	void add(MTLRenderPipelineDescriptor* plDesc, id<MTLDevice> mtlDev) {
++		if ( !_enabled || !_enableRender || !_populate || !plDesc || !mtlDev ) { return; }
++
++#if MVK_MACOS_OR_IOS
++		if (@available(macOS 11.0, iOS 14.0, *)) {
++			id<MTLBinaryArchive> archive = newRetainedArchive(mtlDev);
++			if ( !archive ) { return; }
++
++			unique_lock<mutex> addLock(_archiveAddLock, try_to_lock);
++			if ( !addLock.owns_lock() ) {
++				logSkippedAdd("render");
++				[archive release];
++				return;
++			}
++
++			NSError* err = nil;
++			if ([archive addRenderPipelineFunctionsWithDescriptor: plDesc error: &err]) {
++				markDirty("render");
++			} else {
++				logAddFailure("render", err);
++			}
++			[archive release];
++		} else {
++			logUnavailableOnce();
++		}
++#else
++		logUnavailableOnce();
++#endif
++	}
++
++	void add(MTLComputePipelineDescriptor* plDesc, id<MTLDevice> mtlDev) {
++		if ( !_enabled || !_enableCompute || !_populate || !plDesc || !mtlDev ) { return; }
++
++#if MVK_MACOS_OR_IOS
++		if (@available(macOS 11.0, iOS 14.0, *)) {
++			id<MTLBinaryArchive> archive = newRetainedArchive(mtlDev);
++			if ( !archive ) { return; }
++
++			unique_lock<mutex> addLock(_archiveAddLock, try_to_lock);
++			if ( !addLock.owns_lock() ) {
++				logSkippedAdd("compute");
++				[archive release];
++				return;
++			}
++
++			NSError* err = nil;
++			if ([archive addComputePipelineFunctionsWithDescriptor: plDesc error: &err]) {
++				markDirty("compute");
++			} else {
++				logAddFailure("compute", err);
++			}
++			[archive release];
++		} else {
++			logUnavailableOnce();
++		}
++#else
++		logUnavailableOnce();
++#endif
++	}
++
++	void serialize() {
++		if ( !_enabled ) { return; }
++		lock_guard<mutex> lock(_lock);
++		serializeLocked();
++	}
++
++	bool retryRenderWithoutArchive(MTLRenderPipelineDescriptor* plDesc) {
++		if ( !_enabled || !_enableRender || !plDesc ) { return false; }
++
++#if MVK_MACOS_OR_IOS
++		if (@available(macOS 11.0, iOS 14.0, *)) {
++			if (plDesc.binaryArchives.count == 0) { return false; }
++
++			plDesc.binaryArchives = nil;
++			lock_guard<mutex> lock(_lock);
++			_renderAttachDisabled = true;
++			if (!_renderRetryLogged) {
++				MVK_DTR_BINARY_ARCHIVE_LOG_WARN("render pipeline failed with archive; retrying without archive and disabling render attachment for this process");
++				_renderRetryLogged = true;
++			}
++			return true;
++		}
++#endif
++		return false;
++	}
++
++	bool retryComputeWithoutArchive(MTLComputePipelineDescriptor* plDesc) {
++		if ( !_enabled || !_enableCompute || !plDesc ) { return false; }
++
++#if MVK_MACOS_OR_IOS
++		if (@available(macOS 11.0, iOS 14.0, *)) {
++			if (plDesc.binaryArchives.count == 0) { return false; }
++
++			plDesc.binaryArchives = nil;
++			lock_guard<mutex> lock(_lock);
++			_computeAttachDisabled = true;
++			if (!_computeRetryLogged) {
++				MVK_DTR_BINARY_ARCHIVE_LOG_WARN("compute pipeline failed with archive; retrying without archive and disabling compute attachment for this process");
++				_computeRetryLogged = true;
++			}
++			return true;
++		}
++#endif
++		return false;
++	}
++
++	~MVKDTRBinaryArchiveManager() {
++		serialize();
++		[_archive release];
++		[_mtlDevice release];
++		[_archiveURL release];
++		[_archivePath release];
++	}
++
++private:
++	MVKDTRBinaryArchiveManager() {
++		_enabled = false;
++		_populate = false;
++		_enableRender = false;
++		_enableCompute = false;
++		_verbose = false;
++	}
++
++	bool isRenderAttachDisabled() {
++		lock_guard<mutex> lock(_lock);
++		return _renderAttachDisabled;
++	}
++
++	bool isComputeAttachDisabled() {
++		lock_guard<mutex> lock(_lock);
++		return _computeAttachDisabled;
++	}
++
++	id<MTLBinaryArchive> newRetainedArchive(id<MTLDevice> mtlDev) {
++		lock_guard<mutex> lock(_lock);
++		return [getArchive(mtlDev) retain];
++	}
++
++	id<MTLBinaryArchive> getArchive(id<MTLDevice> mtlDev) {
++		if (_archive) {
++			if (_mtlDevice == mtlDev) { return _archive; }
++			if (!_deviceMismatchLogged) {
++				MVK_DTR_BINARY_ARCHIVE_LOG_WARN("device mismatch, archive disabled for additional device %s", mtlDev.name.UTF8String);
++				_deviceMismatchLogged = true;
++			}
++			return nil;
++		}
++
++		if (_creationAttempted) { return nil; }
++		_creationAttempted = true;
++
++		_archivePath = [newArchivePath(mtlDev) retain];
++		_archiveURL = [[NSURL fileURLWithPath: _archivePath] retain];
++		createArchiveDirectory();
++
++		NSFileManager* fm = [NSFileManager defaultManager];
++		BOOL archiveExists = [fm fileExistsAtPath: _archivePath];
++		BOOL loadedExisting = false;
++		NSError* err = nil;
++		MTLBinaryArchiveDescriptor* desc = [MTLBinaryArchiveDescriptor new];
++		if (archiveExists) { desc.url = _archiveURL; }
++		_archive = [mtlDev newBinaryArchiveWithDescriptor: desc error: &err];
++		[desc release];
++
++		if (_archive) {
++			loadedExisting = archiveExists;
++		} else if (archiveExists) {
++			MVK_DTR_BINARY_ARCHIVE_LOG_WARN("failed to load archive from %s: %s; recreating", _archivePath.UTF8String, errorString(err));
++			err = nil;
++			[fm removeItemAtURL: _archiveURL error: nil];
++			MTLBinaryArchiveDescriptor* emptyDesc = [MTLBinaryArchiveDescriptor new];
++			_archive = [mtlDev newBinaryArchiveWithDescriptor: emptyDesc error: &err];
++			[emptyDesc release];
++		}
++
++		if ( !_archive ) {
++			MVK_DTR_BINARY_ARCHIVE_LOG_WARN("failed to create archive at %s: %s; disabled", _archivePath.UTF8String, errorString(err));
++			return nil;
++		}
++
++		_mtlDevice = [mtlDev retain];
++		_archive.label = @"MoltenVK Detroit Binary Archive";
++		if (loadedExisting) {
++			MVK_DTR_BINARY_ARCHIVE_LOG_INFO("loaded archive from %s", _archivePath.UTF8String);
++		} else {
++			MVK_DTR_BINARY_ARCHIVE_LOG_INFO("created new archive at %s", _archivePath.UTF8String);
++		}
++		return _archive;
++	}
++
++	NSString* newArchivePath(id<MTLDevice> mtlDev) {
++		const char* pathEnv = getenv("MVK_DTR_BINARY_ARCHIVE_PATH");
++		if (pathEnv && *pathEnv) {
++			return [[NSString stringWithUTF8String: pathEnv] stringByExpandingTildeInPath];
++		}
++
++		NSArray<NSString*>* cacheDirs = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
++		NSString* cacheRoot = cacheDirs.count ? cacheDirs[0] : [NSHomeDirectory() stringByAppendingPathComponent: @"Library/Caches"];
++		uint64_t registryID = 0;
++#if MVK_MACOS_OR_IOS
++		if (@available(macOS 10.13, iOS 11.0, *)) {
++			registryID = mtlDev.registryID;
++		}
++#endif
++		NSString* deviceDir = registryID ? [NSString stringWithFormat: @"%016llx", (unsigned long long)registryID] : @"default";
++		return [[[[cacheRoot stringByAppendingPathComponent: @"MoltenVK"]
++							  stringByAppendingPathComponent: @"DetroitBinaryArchive"]
++							 stringByAppendingPathComponent: deviceDir]
++							stringByAppendingPathComponent: @"archive.bin"];
++	}
++
++	void createArchiveDirectory() {
++		NSString* dirPath = [_archivePath stringByDeletingLastPathComponent];
++		NSError* err = nil;
++		if ( ![[NSFileManager defaultManager] createDirectoryAtPath: dirPath withIntermediateDirectories: YES attributes: nil error: &err] ) {
++			MVK_DTR_BINARY_ARCHIVE_LOG_WARN("failed to create archive directory %s: %s", dirPath.UTF8String, errorString(err));
++		}
++	}
++
++	void markAttached(const char* pipelineType) {
++		uint64_t attachCount = 0;
++		{
++			lock_guard<mutex> lock(_lock);
++			if (strcmp(pipelineType, "render") == 0) {
++				attachCount = ++_renderAttachCount;
++			} else {
++				attachCount = ++_computeAttachCount;
++			}
++		}
++		if (_verbose || attachCount == 1) {
++			MVK_DTR_BINARY_ARCHIVE_LOG_INFO("attached archive to %s pipeline descriptor, attach count = %llu", pipelineType, (unsigned long long)attachCount);
++		}
++	}
++
++	void markDirty(const char* pipelineType) {
++		uint64_t pipelineCount = 0;
++		bool shouldSerialize = false;
++		{
++			lock_guard<mutex> lock(_lock);
++			pipelineCount = ++_addedPipelineCount;
++			_dirty = true;
++			shouldSerialize = (_addedPipelineCount - _lastSerializedPipelineCount) >= MVK_DTR_BINARY_ARCHIVE_SERIALIZE_INTERVAL;
++		}
++		if (_verbose || pipelineCount == 1) {
++			MVK_DTR_BINARY_ARCHIVE_LOG_INFO("added %s pipeline to archive, pipeline count = %llu", pipelineType, (unsigned long long)pipelineCount);
++		}
++		if (shouldSerialize) {
++			serialize();
++		}
++	}
++
++	void serializeLocked() {
++		if ( !_archive || !_archiveURL || !_dirty ) { return; }
++
++		createArchiveDirectory();
++		NSError* err = nil;
++		if ([_archive serializeToURL: _archiveURL error: &err]) {
++			_lastSerializedPipelineCount = _addedPipelineCount;
++			_dirty = false;
++			MVK_DTR_BINARY_ARCHIVE_LOG_INFO("serialize success, pipeline count = %llu, path = %s", (unsigned long long)_addedPipelineCount, _archivePath.UTF8String);
++		} else {
++			MVK_DTR_BINARY_ARCHIVE_LOG_WARN("serialize failed: %s", errorString(err));
++		}
++	}
++
++	void logAddFailure(const char* pipelineType, NSError* err) {
++		uint64_t addFailureCount = 0;
++		{
++			lock_guard<mutex> lock(_lock);
++			addFailureCount = ++_addFailureCount;
++		}
++		if (_verbose || addFailureCount == 1) {
++			MVK_DTR_BINARY_ARCHIVE_LOG_WARN("add %s pipeline failed: %s", pipelineType, errorString(err));
++		}
++	}
++
++	void logSkippedAdd(const char* pipelineType) {
++		uint64_t skippedAddCount = 0;
++		{
++			lock_guard<mutex> lock(_lock);
++			skippedAddCount = ++_skippedAddCount;
++		}
++		if (_verbose || skippedAddCount == 1) {
++			MVK_DTR_BINARY_ARCHIVE_LOG_INFO("skipping some %s archive population under concurrent pipeline compilation", pipelineType);
++		}
++	}
++
++	void logUnavailableOnce() {
++		lock_guard<mutex> lock(_lock);
++		if (_unavailableLogged) { return; }
++		MVK_DTR_BINARY_ARCHIVE_LOG_WARN("unavailable on this OS, disabled");
++		_unavailableLogged = true;
++	}
++
++	const char* errorString(NSError* err) {
++		return err.localizedDescription.UTF8String ?: "unknown error";
++	}
++
++	mutex _lock;
++	mutex _archiveAddLock;
++	id<MTLBinaryArchive> _archive = nil;
++	id<MTLDevice> _mtlDevice = nil;
++	NSURL* _archiveURL = nil;
++	NSString* _archivePath = nil;
++	uint64_t _renderAttachCount = 0;
++	uint64_t _computeAttachCount = 0;
++	uint64_t _addedPipelineCount = 0;
++	uint64_t _lastSerializedPipelineCount = 0;
++	uint64_t _addFailureCount = 0;
++	uint64_t _skippedAddCount = 0;
++	bool _enabled = false;
++	bool _enableRender = false;
++	bool _enableCompute = false;
++	bool _populate = true;
++	bool _verbose = false;
++	bool _dirty = false;
++	bool _creationAttempted = false;
++	bool _deviceMismatchLogged = false;
++	bool _renderAttachDisabled = false;
++	bool _renderRetryLogged = false;
++	bool _computeAttachDisabled = false;
++	bool _computeRetryLogged = false;
++	bool _unavailableLogged = false;
++};
++#endif
++
++static bool mvkDTRShaderCacheConcurrentCompileEnabled() {
++	return true;
++}
++
++static bool mvkDTRArgumentBufferNoPaddingEnabled() {
++	return false;
++}
++
+ 
+ #pragma mark - MVKPipelineLayout
+ 
+@@ -1184,8 +1721,44 @@ static bool usesConstantColor(MVKRenderStateFlags dynamic, const VkPipelineColor
+ 		return nil;
+ 	}
+ 
++	SPIRVShaderOutputs fragOutputs;
++	if (pFragmentSS && !getShaderOutputs(_fragmentModule->getSPIRV(), spv::ExecutionModelFragment, pFragmentSS->pName, fragOutputs, errorLog) ) {
++		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get fragment outputs: %s", errorLog.c_str()));
++		return nil;
++	}
++
++	SPIRVShaderInputs fragInputs;
++	if (pFragmentSS && !getShaderInputs(_fragmentModule->getSPIRV(), spv::ExecutionModelFragment, pFragmentSS->pName, fragInputs, errorLog) ) {
++		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get fragment inputs: %s", errorLog.c_str()));
++		return nil;
++	}
++
++	// Ensure all fragment inputs are matched by vertex outputs.
++	// If a fragment input is missing or mismatched, align the vertex output to match.
++	for (auto& fi : fragInputs) {
++		if (fi.builtin == spv::BuiltInMax && fi.isUsed) {
++			bool found = false;
++			for (auto& vo : vtxOutputs) {
++				if (vo.location == fi.location) {
++					if (vo.baseType != fi.baseType) {
++						reportWarning(VK_ERROR_VALIDATION_FAILED, "Type mismatch at location %u: Vertex stage outputs type %d, but Fragment stage expects type %d. Aligning types.", fi.location, vo.baseType, fi.baseType);
++						vo.baseType = fi.baseType;
++					}
++					vo.isUsed = true;
++					found = true;
++					break;
++				}
++			}
++			if (!found) {
++				reportWarning(VK_ERROR_VALIDATION_FAILED, "Fragment shader uses input at location %u, but vertex shader does not output it. Adding dummy vertex output.", fi.location);
++				vtxOutputs.push_back(fi);
++				vtxOutputs.back().isUsed = true;
++			}
++		}
++	}
++
+ 	// Add shader stages. Compile vertex shader before others just in case conversion changes anything...like rasterizaion disable.
+-	if (!addVertexShaderToPipeline(plDesc, pCreateInfo, shaderConfig, pVertexSS, pVertexFB, pFragmentSS)) { return nil; }
++	if (!addVertexShaderToPipeline(plDesc, pCreateInfo, shaderConfig, vtxOutputs, pVertexSS, pVertexFB, pFragmentSS)) { return nil; }
+ 
+ 	// Vertex input
+ 	// This needs to happen before compiling the fragment shader, or we'll lose information on vertex attributes.
+@@ -1195,7 +1768,7 @@ static bool usesConstantColor(MVKRenderStateFlags dynamic, const VkPipelineColor
+ 	if (!addFragmentShaderToPipeline(plDesc, pCreateInfo, shaderConfig, vtxOutputs, pFragmentSS, pFragmentFB)) { return nil; }
+ 
+ 	// Output
+-	addFragmentOutputToPipeline(plDesc, pCreateInfo);
++	addFragmentOutputToPipeline(plDesc, pCreateInfo, fragOutputs);
+ 
+ 	// Metal does not allow the name of the pipeline to be changed after it has been created,
+ 	// and we need to create the Metal pipeline immediately to provide error feedback to app.
+@@ -1403,6 +1976,7 @@ static MTLVertexFormat mvkAdjustFormatVectorToSize(MTLVertexFormat format, uint3
+ 
+ 	SPIRVShaderOutputs tcOutputs, teOutputs;
+ 	SPIRVShaderInputs teInputs;
++	SPIRVShaderInputs fragInputs;
+ 	std::string errorLog;
+ 	if (!getShaderOutputs(_tessCtlModule->getSPIRV(), spv::ExecutionModelTessellationControl, pTessCtlSS->pName, tcOutputs, errorLog) ) {
+ 		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get tessellation control outputs: %s", errorLog.c_str()));
+@@ -1412,6 +1986,33 @@ static MTLVertexFormat mvkAdjustFormatVectorToSize(MTLVertexFormat format, uint3
+ 		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get tessellation evaluation outputs: %s", errorLog.c_str()));
+ 		return nil;
+ 	}
++	if (pFragmentSS && !getShaderInputs(_fragmentModule->getSPIRV(), spv::ExecutionModelFragment, pFragmentSS->pName, fragInputs, errorLog) ) {
++		setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Failed to get fragment inputs: %s", errorLog.c_str()));
++		return nil;
++	}
++
++	// Ensure all fragment inputs are matched by tessellation evaluation outputs.
++	for (auto& fi : fragInputs) {
++		if (fi.builtin == spv::BuiltInMax && fi.isUsed) {
++			bool found = false;
++			for (auto& vo : teOutputs) {
++				if (vo.location == fi.location) {
++					if (vo.baseType != fi.baseType) {
++						reportWarning(VK_ERROR_VALIDATION_FAILED, "Type mismatch at location %u: TessEval stage outputs type %d, but Fragment stage expects type %d. Aligning types.", fi.location, vo.baseType, fi.baseType);
++						vo.baseType = fi.baseType;
++					}
++					vo.isUsed = true;
++					found = true;
++					break;
++				}
++			}
++			if (!found) {
++				reportWarning(VK_ERROR_VALIDATION_FAILED, "Fragment shader uses input at location %u, but TessEval shader does not output it. Adding dummy TessEval output.", fi.location);
++				teOutputs.push_back(fi);
++				teOutputs.back().isUsed = true;
++			}
++		}
++	}
+ 
+ 	// Add shader stages. Compile tessellation evaluation shader before others just in case conversion changes anything...like rasterizaion disable.
+ 	if (!addTessEvalShaderToPipeline(plDesc, pCreateInfo, shaderConfig, tcOutputs, pTessEvalSS, pTessEvalFB, pFragmentSS)) {
+@@ -1429,7 +2030,7 @@ static MTLVertexFormat mvkAdjustFormatVectorToSize(MTLVertexFormat format, uint3
+ 	addTessellationToPipeline(plDesc, reflectData, pCreateInfo->pTessellationState);
+ 
+ 	// Output
+-	addFragmentOutputToPipeline(plDesc, pCreateInfo);
++	addFragmentOutputToPipeline(plDesc, pCreateInfo, teOutputs);
+ 
+ 	return plDesc;
+ }
+@@ -1484,6 +2085,7 @@ static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfigura
+ bool MVKGraphicsPipeline::addVertexShaderToPipeline(MTLRenderPipelineDescriptor* plDesc,
+ 													const VkGraphicsPipelineCreateInfo* pCreateInfo,
+ 													SPIRVToMSLConversionConfiguration& shaderConfig,
++													SPIRVShaderOutputs& vtxOutputs,
+ 													const VkPipelineShaderStageCreateInfo* pVertexSS,
+ 													VkPipelineCreationFeedback* pVertexFB,
+ 													const VkPipelineShaderStageCreateInfo*& pFragmentSS) {
+@@ -1497,6 +2099,7 @@ static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfigura
+ 	shaderConfig.options.mslOptions.capture_output_to_buffer = false;
+ 	shaderConfig.options.mslOptions.disable_rasterization = !_isRasterizing;
+ 	addVertexInputToShaderConversionConfig(shaderConfig, pCreateInfo);
++	addNextStageInputToShaderConversionConfig(shaderConfig, vtxOutputs);
+ 
+ 	MVKMTLFunction func = getMTLFunction(shaderConfig, pVertexSS, pVertexFB, _vertexModule, "Vertex");
+ 	id<MTLFunction> mtlFunc = func.getMTLFunction();
+@@ -1754,6 +2357,7 @@ static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfigura
+     }
+ 
+ 	// Vertex attributes
++	std::vector<uint32_t> boundLocations;
+ 	uint32_t vaCnt = pVI->vertexAttributeDescriptionCount;
+ 	for (uint32_t i = 0; i < vaCnt; i++) {
+ 		const VkVertexInputAttributeDescription* pVKVA = &pVI->pVertexAttributeDescriptions[i];
+@@ -1811,9 +2415,44 @@ static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfigura
+ 			vaDesc.format = mtlFormat;
+ 			vaDesc.bufferIndex = (decltype(vaDesc.bufferIndex))getMetalBufferIndexForVertexAttributeBinding(vaBinding);
+ 			vaDesc.offset = vaOffset;
++
++			boundLocations.push_back(pVKVA->location);
+ 		}
+ 	}
+ 
++	// Metal requires all vertex attributes used by the shader to be defined in the vertex descriptor.
++	// If the app hasn't provided one, add a dummy one.
++	uint32_t dummyBufferIndex = 0;
++	bool foundUsedBuffer = false;
++	for (uint32_t i = 0; i < kMVKMaxBufferCount; i++) {
++		if (_mtlVertexBuffers.get(i)) {
++			dummyBufferIndex = i;
++			foundUsedBuffer = true;
++			break;
++		}
++	}
++
++	for (auto& ctxSI : shaderConfig.shaderInputs) {
++		if (ctxSI.outIsUsedByShader && ctxSI.shaderVar.builtin == spv::BuiltInMax && std::find(boundLocations.begin(), boundLocations.end(), ctxSI.shaderVar.location) == boundLocations.end()) {
++			if (ctxSI.shaderVar.location < 31) {
++				auto vaDesc = inputDesc.attributes[ctxSI.shaderVar.location];
++				if ((uint32_t)vaDesc.format == 0) {
++					vaDesc.format = (decltype(vaDesc.format))MTLVertexFormatUChar4;
++					vaDesc.bufferIndex = dummyBufferIndex;
++					vaDesc.offset = 0;
++				}
++			}
++		}
++	}
++
++	// If we had to use a buffer that wasn't already configured, make it safe.
++	if (!foundUsedBuffer) {
++		auto vbDesc = inputDesc.layouts[dummyBufferIndex];
++		vbDesc.stride = 1; // Metal requires a non-zero stride
++		vbDesc.stepFunction = (decltype(vbDesc.stepFunction))MTLStepFunctionConstant;
++		vbDesc.stepRate = 0;
++	}
++
+ 	// Run through the vertex bindings. Add a new Metal vertex layout for each translated binding,
+ 	// identical to the original layout. The translated binding will index into the same MTLBuffer,
+ 	// but at an offset that is one or more strides away from the original.
+@@ -1920,7 +2559,8 @@ static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfigura
+ }
+ 
+ void MVKGraphicsPipeline::addFragmentOutputToPipeline(MTLRenderPipelineDescriptor* plDesc,
+-													  const VkGraphicsPipelineCreateInfo* pCreateInfo) {
++													  const VkGraphicsPipelineCreateInfo* pCreateInfo,
++													  SPIRVShaderOutputs& fragOutputs) {
+ 	// Topology
+ 	if (pCreateInfo->pInputAssemblyState)
+ 		plDesc.inputPrimitiveTopology = getPrimitiveTopologyClass();
+@@ -1937,6 +2577,37 @@ static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfigura
+ 
+ 			VkFormat attachFmt = pRendInfo->pColorAttachmentFormats[caIdx];
+ 			MTLPixelFormat mtlPixFmt = getPixelFormats()->getMTLPixelFormat(attachFmt);
++
++			// Check if the shader output type mismatches the attachment format.
++			// e.g., Detroit: Become Human requests R32Uint but outputs a float4.
++			// Metal will assert if they do not match exactly.
++			for (const auto& so : fragOutputs) {
++				if (so.location == caLoc) {
++					MVKFormatType mvkFmtType = getPixelFormats()->getFormatType(mtlPixFmt);
++					bool isFloatFmt = (mvkFmtType == kMVKFormatColorHalf || mvkFmtType == kMVKFormatColorFloat);
++					bool isUIntFmt = (mvkFmtType == kMVKFormatColorUInt8 || mvkFmtType == kMVKFormatColorUInt16 || mvkFmtType == kMVKFormatColorUInt32);
++
++					if (so.baseType == SPIRV_CROSS_NAMESPACE::SPIRType::Float && isUIntFmt) {
++						// Shader outputs float, but attachment is UInt. Substitute to a float format.
++						switch (getPixelFormats()->getBytesPerBlock(attachFmt)) {
++							case 4: mtlPixFmt = MTLPixelFormatR32Float; break;
++							case 8: mtlPixFmt = MTLPixelFormatRG32Float; break;
++							case 16: mtlPixFmt = MTLPixelFormatRGBA32Float; break;
++						}
++						reportWarning(VK_ERROR_VALIDATION_FAILED, "Shader fragment output at location %u is Float, but color attachment format is UInt. Substituted MTLPixelFormat to %u to prevent Metal crash.", caLoc, (uint32_t)mtlPixFmt);
++					} else if (so.baseType == SPIRV_CROSS_NAMESPACE::SPIRType::UInt && isFloatFmt) {
++						// Shader outputs UInt, but attachment is Float. Substitute to a UInt format.
++						switch (getPixelFormats()->getBytesPerBlock(attachFmt)) {
++							case 4: mtlPixFmt = MTLPixelFormatR32Uint; break;
++							case 8: mtlPixFmt = MTLPixelFormatRG32Uint; break;
++							case 16: mtlPixFmt = MTLPixelFormatRGBA32Uint; break;
++						}
++						reportWarning(VK_ERROR_VALIDATION_FAILED, "Shader fragment output at location %u is UInt, but color attachment format is Float. Substituted MTLPixelFormat to %u to prevent Metal crash.", caLoc, (uint32_t)mtlPixFmt);
++					}
++					break;
++				}
++			}
++
+ 			bool supportsBlend = getPixelFormats()->getCapabilities(mtlPixFmt) & kMVKMTLFmtCapsBlend;
+ 			MTLRenderPipelineColorAttachmentDescriptor* colorDesc = plDesc.colorAttachments[caLoc];
+             colorDesc.pixelFormat = mtlPixFmt;
+@@ -2041,7 +2712,7 @@ static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfigura
+ 	bool useMetalArgBuff = isUsingMetalArgumentBuffers();
+ 	shaderConfig.options.mslOptions.argument_buffers = useMetalArgBuff;
+ 	shaderConfig.options.mslOptions.force_active_argument_buffer_resources = false;
+-	shaderConfig.options.mslOptions.pad_argument_buffer_resources = useMetalArgBuff;
++	shaderConfig.options.mslOptions.pad_argument_buffer_resources = useMetalArgBuff && !mvkDTRArgumentBufferNoPaddingEnabled();
+ 	shaderConfig.options.mslOptions.argument_buffers_tier = (SPIRV_CROSS_NAMESPACE::CompilerMSL::Options::ArgumentBuffersTier)getMetalFeatures().argumentBuffersTier;
+ 	shaderConfig.options.mslOptions.agx_manual_cube_grad_fixup = mtlFeats.needsCubeGradWorkaround;
+ 
+@@ -2255,9 +2926,13 @@ static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfigura
+ 				break;
+ 
+ 			case kMVKFormatColorFloat:
++				sosv.format = MSL_SHADER_VARIABLE_FORMAT_FLOAT32;
++				break;
+ 			case kMVKFormatColorInt32:
++				sosv.format = MSL_SHADER_VARIABLE_FORMAT_INT32;
++				break;
+ 			case kMVKFormatColorUInt32:
+-				sosv.format = MSL_SHADER_VARIABLE_FORMAT_ANY32;
++				sosv.format = MSL_SHADER_VARIABLE_FORMAT_UINT32;
+ 				break;
+ 
+             default:
+@@ -2300,9 +2975,13 @@ static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfigura
+ 				break;
+ 
+ 			case kMVKFormatColorFloat:
++				sisv.format = MSL_SHADER_VARIABLE_FORMAT_FLOAT32;
++				break;
+ 			case kMVKFormatColorInt32:
++				sisv.format = MSL_SHADER_VARIABLE_FORMAT_INT32;
++				break;
+ 			case kMVKFormatColorUInt32:
+-				sisv.format = MSL_SHADER_VARIABLE_FORMAT_ANY32;
++				sisv.format = MSL_SHADER_VARIABLE_FORMAT_UINT32;
+ 				break;
+ 
+             default:
+@@ -2486,7 +3165,7 @@ static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfigura
+ 	bool useMetalArgBuff = isUsingMetalArgumentBuffers();
+ 	shaderConfig.options.mslOptions.argument_buffers = useMetalArgBuff;
+ 	shaderConfig.options.mslOptions.force_active_argument_buffer_resources = false;
+-	shaderConfig.options.mslOptions.pad_argument_buffer_resources = useMetalArgBuff;
++	shaderConfig.options.mslOptions.pad_argument_buffer_resources = useMetalArgBuff && !mvkDTRArgumentBufferNoPaddingEnabled();
+ 	shaderConfig.options.mslOptions.argument_buffers_tier = (SPIRV_CROSS_NAMESPACE::CompilerMSL::Options::ArgumentBuffersTier)getMetalFeatures().argumentBuffersTier;
+ 
+ #if MVK_MACOS
+@@ -2543,16 +3222,58 @@ static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfigura
+ 
+ // Return a shader library from the specified shader conversion configuration sourced from the specified shader module.
+ MVKShaderLibrary* MVKPipelineCache::getShaderLibrary(SPIRVToMSLConversionConfiguration* pContext,
+-													 MVKShaderModule* shaderModule,
+-													 MVKPipeline* pipeline,
+-													 VkPipelineCreationFeedback* pShaderFeedback,
+-													 uint64_t startTime) {
++											 MVKShaderModule* shaderModule,
++											 MVKPipeline* pipeline,
++											 VkPipelineCreationFeedback* pShaderFeedback,
++										 uint64_t startTime) {
+ 	if (_isExternallySynchronized) {
+ 		return getShaderLibraryImpl(pContext, shaderModule, pipeline, pShaderFeedback, startTime);
+-	} else {
++	}
++	if ( !mvkDTRShaderCacheConcurrentCompileEnabled() ) {
+ 		lock_guard<mutex> lock(_shaderCacheLock);
+ 		return getShaderLibraryImpl(pContext, shaderModule, pipeline, pShaderFeedback, startTime);
+ 	}
++
++	MVKShaderModuleKey smKey = shaderModule->getKey();
++	MVKShaderLibraryCache* slCache = nullptr;
++	MVKShaderLibrary* shLib = nullptr;
++	SPIRVToMSLConversionResult conversionResult;
++
++	unique_lock<mutex> lock(_shaderCacheLock);
++
++	slCache = getShaderLibraryCache(smKey);
++	shLib = slCache->findShaderLibrary(pContext, pShaderFeedback, startTime);
++	if (shLib) {
++		if (pShaderFeedback) { mvkEnableFlags(pShaderFeedback->flags, VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT); }
++		return shLib;
++	}
++
++	if (pipeline->shouldFailOnPipelineCompileRequired()) {
++		return nullptr;
++	}
++
++	// Convert under the cache lock because MVKShaderModule's SPIR-V converter is not guarded here.
++	// Metal source compilation below is much more expensive and can safely happen outside the lock.
++	if ( !shaderModule->convert(pContext, conversionResult) ) { return nullptr; }
++	lock.unlock();
++
++	MVKShaderLibrary* newShLib = new MVKShaderLibrary(slCache->_owner, conversionResult);
++
++	lock.lock();
++
++	// Another pipeline creation thread might have populated this shader while Metal was compiling.
++	slCache = getShaderLibraryCache(smKey);
++	shLib = slCache->findShaderLibrary(pContext);
++	if (shLib) {
++		newShLib->destroy();
++		if (pShaderFeedback) { pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime); }
++		return shLib;
++	}
++
++	slCache->_shaderLibraries.emplace_back(*pContext, newShLib);
++	markDirty();
++	if (pShaderFeedback) { pShaderFeedback->duration += mvkGetElapsedNanoseconds(startTime); }
++	return newShLib;
+ }
+ 
+ MVKShaderLibrary* MVKPipelineCache::getShaderLibraryImpl(SPIRVToMSLConversionConfiguration* pContext,
+@@ -2631,6 +3352,13 @@ static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfigura
+ 
+ 		if ( !pDataSize ) { return VK_SUCCESS; }
+ 
++		if (_dataSize == 0) {
++			mvk::countbuf cb;
++			ostream outStream(&cb);
++			writeData(outStream, true);
++			_dataSize = cb.buffSize;
++		}
++
+ 		if (pData) {
+ 			if (*pDataSize >= _dataSize) {
+ 				mvk::membuf mb((char*)pData, _dataSize);
+@@ -2643,12 +3371,6 @@ static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfigura
+ 				return VK_INCOMPLETE;
+ 			}
+ 		} else {
+-			if (_dataSize == 0) {
+-				mvk::countbuf cb;
+-				ostream outStream(&cb);
+-				writeData(outStream, true);
+-				_dataSize = cb.buffSize;
+-			}
+ 			*pDataSize = _dataSize;
+ 			return VK_SUCCESS;
+ 		}
+@@ -3078,7 +3800,9 @@ void serialize(Archive & archive, MVKCompressor<C>& comp) {
+ 		}
+ 	});
+ 
+-	return [_mtlRenderPipelineState retain];
++	id<MTLRenderPipelineState> mtlRenderPipelineState = [_mtlRenderPipelineState retain];
++	lock.unlock();
++	return mtlRenderPipelineState;
+ }
+ 
+ bool MVKRenderPipelineCompiler::compileComplete(id<MTLRenderPipelineState> mtlRenderPipelineState, NSError* compileError) {
+@@ -3113,7 +3837,9 @@ void serialize(Archive & archive, MVKCompressor<C>& comp) {
+ 		}
+ 	});
+ 
+-	return [_mtlComputePipelineState retain];
++	id<MTLComputePipelineState> mtlComputePipelineState = [_mtlComputePipelineState retain];
++	lock.unlock();
++	return mtlComputePipelineState;
+ }
+ 
+ bool MVKComputePipelineCompiler::compileComplete(id<MTLComputePipelineState> mtlComputePipelineState, NSError* compileError) {
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.h b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.h
+index b18549c7..f2dec940 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.h
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.h
+@@ -32,6 +32,7 @@ class MVKQueue;
+ class MVKQueueSubmission;
+ class MVKPhysicalDevice;
+ class MVKGPUCaptureScope;
++class MVKSwapchain;
+ 
+ 
+ #pragma mark -
+@@ -314,9 +315,11 @@ public:
+ 	MVKQueuePresentSurfaceSubmission(MVKQueue* queue,
+ 									 const VkPresentInfoKHR* pPresentInfo);
+ 
++	~MVKQueuePresentSurfaceSubmission() override;
++
+ protected:
+ 	void finish() override;
+ 
+ 	MVKSmallVector<MVKImagePresentInfo, 4> _presentInfo;
++	MVKSmallVector<MVKSwapchain*, 4> _presentSwapchains;
+ };
+-
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
+index dec4b452..b71a0faf 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
+@@ -24,10 +24,69 @@
+ #include "MVKFoundation.h"
+ #include "MVKOSExtensions.h"
+ #include "MVKGPUCapture.h"
++#include <cstdarg>
++#include <cstdio>
++#include <cstdlib>
++#include <chrono>
++#include <condition_variable>
++#include <memory>
++#include <mutex>
++#include <pthread.h>
++#include <thread>
+ 
+ using namespace std;
+ 
+ 
++[[maybe_unused]] static bool mvkDTRSurfaceLogEnabled() {
++	return false;
++}
++
++static bool mvkDTRDeferPresentFinishEnabled() {
++	return false;
++}
++
++static bool mvkDTRLeakPresentSubmissionsEnabled() {
++	return false;
++}
++
++static bool mvkDTRSkipPresentCaptureScopeEnabled() {
++	return false;
++}
++
++static bool mvkDTRSkipPresentFinishEnabled() {
++	return false;
++}
++
++static bool mvkDTRSkipQueuePresentCompletedHandlerEnabled() {
++	return false;
++}
++
++static bool mvkDTRSkipQueuePresentCommitEnabled() {
++	return false;
++}
++
++static bool mvkDTRWaitForPresentedEnabled() {
++	return false;
++}
++
++static uint32_t mvkDTRWaitForPresentedTimeoutMS() {
++	return 0;
++}
++
++[[maybe_unused]] static uint64_t mvkDTRCurrentThreadID() {
++	uint64_t tid = 0;
++	pthread_threadid_np(pthread_self(), &tid);
++	return tid;
++}
++
++[[maybe_unused]] static NSString* mvkDTRSurfaceLogPath() {
++	return nil;
++}
++
++template<typename... Args> static inline void mvkDTRDiscardLogArgs(Args&&...) {}
++#define mvkDTRSurfaceLog(...) do { if (false) { mvkDTRDiscardLogArgs(__VA_ARGS__); } } while (false)
++
++
+ #pragma mark -
+ #pragma mark MVKQueueFamily
+ 
+@@ -146,7 +205,26 @@
+ template VkResult MVKQueue::submit(uint32_t submitCount, const VkSubmitInfo* pSubmits, VkFence fence, MVKCommandUse cmdUse);
+ 
+ VkResult MVKQueue::submit(const VkPresentInfoKHR* pPresentInfo) {
+-	return submit(new MVKQueuePresentSurfaceSubmission(this, pPresentInfo));
++	mvkDTRSurfaceLog("queue present submit begin queue=%p swapchains=%u waits=%u pResults=%p first_swapchain=%p first_index=%u",
++					 this, pPresentInfo->swapchainCount, pPresentInfo->waitSemaphoreCount,
++					 pPresentInfo->pResults,
++					 pPresentInfo->swapchainCount ? pPresentInfo->pSwapchains[0] : VK_NULL_HANDLE,
++					 pPresentInfo->swapchainCount ? pPresentInfo->pImageIndices[0] : 0);
++	if (pPresentInfo->pResults) {
++		for (uint32_t scIdx = 0; scIdx < pPresentInfo->swapchainCount; scIdx++) {
++			mvkDTRSurfaceLog("queue present submit pResults before queue=%p ordinal=%u swapchain=%p slot=%p",
++							 this, scIdx, pPresentInfo->pSwapchains[scIdx], &pPresentInfo->pResults[scIdx]);
++		}
++	}
++	VkResult rslt = submit(new MVKQueuePresentSurfaceSubmission(this, pPresentInfo));
++	mvkDTRSurfaceLog("queue present submit end queue=%p result=%d pResults=%p", this, rslt, pPresentInfo->pResults);
++	if (pPresentInfo->pResults) {
++		for (uint32_t scIdx = 0; scIdx < pPresentInfo->swapchainCount; scIdx++) {
++			mvkDTRSurfaceLog("queue present submit pResults after queue=%p ordinal=%u swapchain=%p slot=%p value=%d top_result=%d",
++							 this, scIdx, pPresentInfo->pSwapchains[scIdx], &pPresentInfo->pResults[scIdx], pPresentInfo->pResults[scIdx], rslt);
++		}
++	}
++	return rslt;
+ }
+ 
+ VkResult MVKQueue::waitIdle(MVKCommandUse cmdUse) {
+@@ -411,7 +489,11 @@
+ }
+ 
+ MVKSemaphoreSubmitInfo::~MVKSemaphoreSubmitInfo() {
+-	if (_semaphore) { _semaphore->release(); }
++	if (_semaphore) {
++		mvkDTRSurfaceLog("semaphore submit info release begin info=%p semaphore=%p value=%llu", this, _semaphore, (unsigned long long)value);
++		_semaphore->release();
++		mvkDTRSurfaceLog("semaphore submit info release end info=%p semaphore=%p value=%llu", this, _semaphore, (unsigned long long)value);
++	}
+ }
+ 
+ MVKCommandBufferSubmitInfo::MVKCommandBufferSubmitInfo(const VkCommandBufferSubmitInfo& commandBufferInfo) :
+@@ -454,7 +536,16 @@
+ }
+ 
+ MVKQueueSubmission::~MVKQueueSubmission() {
++	mvkDTRSurfaceLog("queue submission dtor begin submission=%p queue=%p waits=%zu", this, _queue, _waitSemaphores.size());
++	if ( !_waitSemaphores.empty() ) {
++		mvkDTRSurfaceLog("queue submission wait semaphores clear begin submission=%p queue=%p waits=%zu", this, _queue, _waitSemaphores.size());
++		_waitSemaphores.clear();
++		mvkDTRSurfaceLog("queue submission wait semaphores clear end submission=%p queue=%p", this, _queue);
++	}
++	mvkDTRSurfaceLog("queue submission queue release begin submission=%p queue=%p", this, _queue);
+ 	_queue->release();
++	mvkDTRSurfaceLog("queue submission queue release end submission=%p queue=%p", this, _queue);
++	mvkDTRSurfaceLog("queue submission dtor end submission=%p queue=%p", this, _queue);
+ }
+ 
+ 
+@@ -713,21 +804,28 @@
+ // If the semaphores are not encodable, wait on them inline after presenting.
+ // The semaphores know what to do.
+ VkResult MVKQueuePresentSurfaceSubmission::execute() {
++	mvkDTRSurfaceLog("queue present execute begin submission=%p queue=%p present_count=%zu", this, _queue, _presentInfo.size());
+ 	// MTLCommandBuffer retain references to avoid rare case where objects are destroyed too early.
+ 	// Although testing could not determine which objects were being lost, queue present MTLCommandBuffers
+ 	// are used only once per frame, and retain so few objects, that blanket retention is still performant.
+ 	id<MTLCommandBuffer> mtlCmdBuff = _queue->getMTLCommandBuffer(kMVKCommandUseQueuePresent, true);
++	mvkDTRSurfaceLog("queue present command buffer submission=%p cmd=%p", this, mtlCmdBuff);
+ 
+ 	for (auto& ws : _waitSemaphores) {
+ 		ws.encodeWait(mtlCmdBuff);	// Encoded semaphore waits
+ 		ws.encodeWait(nil);			// Inline semaphore waits
+ 	}
++	mvkDTRSurfaceLog("queue present waits encoded submission=%p waits=%zu", this, _waitSemaphores.size());
+ 
+ 	// Wait time from an async vkQueuePresentKHR() call to starting presentation of the swapchains
+ 	addPerformanceInterval(getPerformanceStats().queue.waitPresentSwapchains, _creationTime);
+ 
+ 	for (int i = 0; i < _presentInfo.size(); i++ ) {
++		mvkDTRSurfaceLog("queue present image begin submission=%p ordinal=%d image=%p mode=%u present_id=%llu cmd=%p",
++						 this, i, _presentInfo[i].presentableImage, _presentInfo[i].presentMode,
++						 (unsigned long long)_presentInfo[i].presentId, mtlCmdBuff);
+ 		setConfigurationResult(_presentInfo[i].presentableImage->presentCAMetalDrawable(mtlCmdBuff, _presentInfo[i]));
++		mvkDTRSurfaceLog("queue present image end submission=%p ordinal=%d result=%d", this, i, getConfigurationResult());
+ 	}
+ 
+ 	if (_queue->_queueFamily->getIndex() == getMVKConfig().defaultGPUCaptureScopeQueueFamilyIndex &&
+@@ -742,33 +840,135 @@
+ 	// or if the MTLCommandBuffer could not be created, call finish() directly.
+ 	// Retrieve the result first, because finish() will destroy this instance.
+ 	VkResult rslt = getConfigurationResult();
++	bool deferPresentFinish = mvkDTRDeferPresentFinishEnabled();
++	bool skipPresentFinish = mvkDTRSkipPresentFinishEnabled();
++	bool skipQueuePresentCompletedHandler = mvkDTRSkipQueuePresentCompletedHandlerEnabled();
++	bool skipQueuePresentCommit = mvkDTRSkipQueuePresentCommitEnabled();
++	bool waitForPresented = mvkDTRWaitForPresentedEnabled();
++	uint32_t waitForPresentedTimeoutMS = mvkDTRWaitForPresentedTimeoutMS();
++	auto presentSwapchains = _presentSwapchains;
++	auto* loggedSubmission = this;
+ 	if (mtlCmdBuff) {
+-		[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) { this->finish(); }];
++		if (skipQueuePresentCommit) {
++			mvkDTRSurfaceLog("queue present commit skipped submission=%p cmd=%p result=%d", this, mtlCmdBuff, rslt);
++			return rslt;
++		}
++		if (waitForPresented) {
++			struct CompletionWaiter {
++				mutex lock;
++				condition_variable cond;
++				bool completed = false;
++			};
++			auto completionWaiter = make_shared<CompletionWaiter>();
++			[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) {
++				NSString* errDesc = mtlCB.error.localizedDescription ?: @"";
++				mvkDTRSurfaceLog("queue present synchronous completed handler submission=%p cmd=%p status=%lu error=%s", loggedSubmission, mtlCB, (unsigned long)mtlCB.status, errDesc.UTF8String);
++				{
++					lock_guard<mutex> lock(completionWaiter->lock);
++					completionWaiter->completed = true;
++				}
++				completionWaiter->cond.notify_all();
++			}];
++
++			mvkDTRSurfaceLog("queue present synchronous commit begin submission=%p cmd=%p result=%d timeout_ms=%u", this, mtlCmdBuff, rslt, waitForPresentedTimeoutMS);
++			[mtlCmdBuff commit];
++			mvkDTRSurfaceLog("queue present synchronous commit end submission=%p cmd=%p result=%d", this, mtlCmdBuff, rslt);
++
++			bool completed = false;
++			{
++				unique_lock<mutex> lock(completionWaiter->lock);
++				completed = completionWaiter->cond.wait_for(lock, chrono::milliseconds(waitForPresentedTimeoutMS), [&]{ return completionWaiter->completed; });
++			}
++			mvkDTRSurfaceLog("queue present synchronous completion wait end submission=%p cmd=%p completed=%u timeout_ms=%u", loggedSubmission, mtlCmdBuff, completed ? 1 : 0, waitForPresentedTimeoutMS);
++
++			for (size_t scIdx = 0; scIdx < presentSwapchains.size(); scIdx++) {
++				MVKSwapchain* mvkSC = presentSwapchains[scIdx];
++				if ( !mvkSC ) { continue; }
++				uint32_t initialUnpresented = mvkSC->getUnpresentedImageCount();
++				mvkDTRSurfaceLog("queue present synchronous presented wait begin submission=%p ordinal=%zu swapchain=%p initial_unpresented=%u timeout_ms=%u", loggedSubmission, scIdx, mvkSC, initialUnpresented, waitForPresentedTimeoutMS);
++				auto deadline = chrono::steady_clock::now() + chrono::milliseconds(waitForPresentedTimeoutMS);
++				while (mvkSC->getUnpresentedImageCount() && chrono::steady_clock::now() < deadline) {
++					this_thread::sleep_for(chrono::milliseconds(1));
++				}
++				uint32_t finalUnpresented = mvkSC->getUnpresentedImageCount();
++				mvkDTRSurfaceLog("queue present synchronous presented wait end submission=%p ordinal=%zu swapchain=%p final_unpresented=%u timed_out=%u", loggedSubmission, scIdx, mvkSC, finalUnpresented, finalUnpresented ? 1 : 0);
++			}
++
++			if (skipPresentFinish) {
++				mvkDTRSurfaceLog("queue present synchronous finish skipped submission=%p", loggedSubmission);
++				return rslt;
++			}
++			mvkDTRSurfaceLog("queue present synchronous finish begin submission=%p", loggedSubmission);
++			finish();
++			return rslt;
++		}
++		if (skipQueuePresentCompletedHandler) {
++			mvkDTRSurfaceLog("queue present completed handler add skipped submission=%p cmd=%p result=%d", this, mtlCmdBuff, rslt);
++		} else {
++			[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) {
++				NSString* errDesc = mtlCB.error.localizedDescription ?: @"";
++				mvkDTRSurfaceLog("queue present completed handler begin submission=%p cmd=%p status=%lu error=%s defer=%u skip_finish=%u", loggedSubmission, mtlCB, (unsigned long)mtlCB.status, errDesc.UTF8String, deferPresentFinish ? 1 : 0, skipPresentFinish ? 1 : 0);
++				if (skipPresentFinish) {
++					mvkDTRSurfaceLog("queue present completed handler finish skipped submission=%p", loggedSubmission);
++					return;
++				}
++				if (deferPresentFinish) {
++					mvkDTRSurfaceLog("queue present completed handler defer finish submission=%p", loggedSubmission);
++					dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
++						@autoreleasepool {
++							mvkDTRSurfaceLog("queue present deferred finish begin submission=%p", loggedSubmission);
++							loggedSubmission->finish();
++							mvkDTRSurfaceLog("queue present deferred finish end submission=%p", loggedSubmission);
++						}
++					});
++				} else {
++					loggedSubmission->finish();
++					mvkDTRSurfaceLog("queue present completed handler finish returned submission=%p", loggedSubmission);
++				}
++			}];
++		}
++		mvkDTRSurfaceLog("queue present commit begin submission=%p cmd=%p result=%d", this, mtlCmdBuff, rslt);
+ 		[mtlCmdBuff commit];
++		mvkDTRSurfaceLog("queue present commit end submission=%p cmd=%p result=%d", this, mtlCmdBuff, rslt);
+ 	} else {
++		mvkDTRSurfaceLog("queue present finish direct submission=%p result=%d", this, rslt);
+ 		finish();
+ 	}
+ 	return rslt;
+ }
+ 
+ void MVKQueuePresentSurfaceSubmission::finish() {
++	mvkDTRSurfaceLog("queue present finish begin submission=%p queue=%p present_count=%zu", this, _queue, _presentInfo.size());
+ 
+ 	// Let Xcode know the current frame is done, then start a new frame,
+ 	// and if auto GPU capture is active, and it's time to stop it, do so.
+-	auto cs = _queue->_submissionCaptureScope;
+-	cs->endScope();
+-	cs->beginScope();
+-	if (_queue->_queueFamily->getIndex() == getMVKConfig().defaultGPUCaptureScopeQueueFamilyIndex &&
+-		_queue->_index == getMVKConfig().defaultGPUCaptureScopeQueueIndex) {
+-		getDevice()->stopAutoGPUCapture(MVK_CONFIG_AUTO_GPU_CAPTURE_SCOPE_FRAME);
++	if (mvkDTRSkipPresentCaptureScopeEnabled()) {
++		mvkDTRSurfaceLog("queue present finish capture skipped submission=%p", this);
++	} else {
++		auto cs = _queue->_submissionCaptureScope;
++		mvkDTRSurfaceLog("queue present finish capture endScope begin submission=%p scope=%p", this, cs);
++		cs->endScope();
++		mvkDTRSurfaceLog("queue present finish capture beginScope begin submission=%p scope=%p", this, cs);
++		cs->beginScope();
++		if (_queue->_queueFamily->getIndex() == getMVKConfig().defaultGPUCaptureScopeQueueFamilyIndex &&
++			_queue->_index == getMVKConfig().defaultGPUCaptureScopeQueueIndex) {
++			mvkDTRSurfaceLog("queue present finish auto capture stop begin submission=%p", this);
++			getDevice()->stopAutoGPUCapture(MVK_CONFIG_AUTO_GPU_CAPTURE_SCOPE_FRAME);
++		}
+ 	}
+ 
++	mvkDTRSurfaceLog("queue present finish destroy begin submission=%p", this);
++	if (mvkDTRLeakPresentSubmissionsEnabled()) {
++		mvkDTRSurfaceLog("queue present finish destroy skipped leak submission=%p", this);
++		return;
++	}
+ 	this->destroy();
+ }
+ 
+ MVKQueuePresentSurfaceSubmission::MVKQueuePresentSurfaceSubmission(MVKQueue* queue,
+-																   const VkPresentInfoKHR* pPresentInfo)
++											   const VkPresentInfoKHR* pPresentInfo)
+ 	: MVKQueueSubmission(queue, pPresentInfo->waitSemaphoreCount, pPresentInfo->pWaitSemaphores, nullptr) {
++	mvkDTRSurfaceLog("queue present ctor begin submission=%p queue=%p swapchains=%u waits=%u pResults=%p", this, queue, pPresentInfo->swapchainCount, pPresentInfo->waitSemaphoreCount, pPresentInfo->pResults);
+ 
+ 	const VkPresentTimesInfoGOOGLE* pPresentTimesInfo = nullptr;
+ 	const VkSwapchainPresentFenceInfoKHR* pPresentFenceInfo = nullptr;
+@@ -831,8 +1031,10 @@
+ 
+ 	VkResult* pSCRslts = pPresentInfo->pResults;
+ 	_presentInfo.reserve(scCnt);
++	_presentSwapchains.reserve(scCnt);
+ 	for (uint32_t scIdx = 0; scIdx < scCnt; scIdx++) {
+ 		MVKSwapchain* mvkSC = (MVKSwapchain*)pPresentInfo->pSwapchains[scIdx];
++		VkExtent2D scExtent = mvkSC->getImageExtent();
+ 		MVKImagePresentInfo presentInfo = {};	// Start with everything zeroed
+ 		presentInfo.queue = _queue;
+ 		presentInfo.presentableImage = mvkSC->getPresentableImage(pPresentInfo->pImageIndices[scIdx]);
+@@ -845,9 +1047,18 @@
+ 		}
+ 		mvkSC->setLayerNeedsDisplay(pRegions ? &pRegions[scIdx] : nullptr);
+ 		_presentInfo.push_back(presentInfo);
++		_presentSwapchains.push_back(mvkSC);
+ 		VkResult scRslt = mvkSC->getSurfaceStatus();
+ 		if (pSCRslts) { pSCRslts[scIdx] = scRslt; }
+ 		setConfigurationResult(scRslt);
++		mvkDTRSurfaceLog("queue present ctor swapchain submission=%p ordinal=%u swapchain=%p index=%u image=%p extent=%ux%u status=%d pResults=%p pResults_value=%d mode=%u present_id=%llu",
++						 this, scIdx, mvkSC, pPresentInfo->pImageIndices[scIdx], presentInfo.presentableImage,
++						 scExtent.width, scExtent.height, scRslt, pSCRslts ? &pSCRslts[scIdx] : nullptr, pSCRslts ? pSCRslts[scIdx] : VK_SUCCESS, presentInfo.presentMode,
++						 (unsigned long long)presentInfo.presentId);
+ 	}
++	mvkDTRSurfaceLog("queue present ctor end submission=%p result=%d present_count=%zu pResults=%p", this, getConfigurationResult(), _presentInfo.size(), pSCRslts);
+ }
+ 
++MVKQueuePresentSurfaceSubmission::~MVKQueuePresentSurfaceSubmission() {
++	mvkDTRSurfaceLog("queue present dtor submission=%p queue=%p present_count=%zu", this, _queue, _presentInfo.size());
++}
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm b/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm
+index 3aa44a44..e7114536 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm
+@@ -20,10 +20,480 @@
+ #include "MVKPipeline.h"
+ #include "MVKFoundation.h"
+ #include <sys/stat.h>
++#include <condition_variable>
++#include <cctype>
++#include <cstdarg>
++#include <cstdlib>
++#include <memory>
++#include <mutex>
++#include <unordered_map>
++#include <unordered_set>
+ 
+ using namespace std;
+ using namespace mvk;
+ 
++#define MVK_DTR_SHADER_LOG_PREFIX "MVK-DTR-BINARY-ARCHIVE: "
++
++static bool mvkDTRBoolEnvValue(const char* name, bool defaultValue) {
++	const char* env = getenv(name);
++	if ( !env ) { return defaultValue; }
++	while (*env == ' ' || *env == '\t' || *env == '\n' || *env == '\r') { env++; }
++	if (*env == '0') { return false; }
++	if (*env == '1') { return true; }
++	return defaultValue;
++}
++
++static const char* mvkDTRGetEnv(const char* primaryName, const char* fallbackName = nullptr) {
++	const char* env = getenv(primaryName);
++	if (env && *env) { return env; }
++	return fallbackName ? getenv(fallbackName) : nullptr;
++}
++
++static bool mvkDTRShaderCacheLogEnabled() {
++	return false;
++}
++
++static uint64_t mvkDTRShaderSlowCompileThresholdNS() {
++	const char* env = getenv("MVK_DTR_SHADER_SLOW_COMPILE_MS");
++	double thresholdMS = (env && *env) ? strtod(env, nullptr) : 1000.0;
++	return thresholdMS <= 0.0 ? 0 : (uint64_t)(thresholdMS * 1000000.0);
++}
++
++static bool mvkDTRShaderResourceLogEnabled() {
++	return false;
++}
++
++static bool mvkDTRMSLLibraryCacheEnabled() {
++	return mvkDTRBoolEnvValue("MVK_DTR_MSL_LIBRARY_CACHE", true);
++}
++
++static NSString* mvkDTRMSLLibraryDiskCacheDir() {
++	const char* env = mvkDTRGetEnv("VK_DTR_MSL_LIBRARY_DISK_CACHE_DIR", "MVK_DTR_MSL_LIBRARY_DISK_CACHE_DIR");
++	if (env && *env) { return [[NSString stringWithUTF8String: env] stringByExpandingTildeInPath]; }
++
++	NSArray<NSString*>* cacheDirs = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
++	NSString* cacheRoot = cacheDirs.count ? cacheDirs[0] : [NSHomeDirectory() stringByAppendingPathComponent: @"Library/Caches"];
++	return [[cacheRoot stringByAppendingPathComponent: @"MoltenVK"] stringByAppendingPathComponent: @"detroit-msl-library-cache-full"];
++}
++
++static bool mvkDTRMSLLibraryDiskCacheEnabled() { return mvkDTRMSLLibraryCacheEnabled() && mvkDTRMSLLibraryDiskCacheDir() != nil; }
++
++static NSString* mvkDTRMSLLibraryDiskCacheFilterPath() {
++	const char* env = getenv("MVK_DTR_MSL_LIBRARY_DISK_CACHE_FILTER_PATH");
++	if ( !env || !*env ) { return nil; }
++	return [[NSString stringWithUTF8String: env] stringByExpandingTildeInPath];
++}
++
++static uint32_t mvkDTRShaderResourceLogMinCount() {
++	return 1024;
++}
++
++[[maybe_unused]] static NSString* mvkDTRShaderLogPath() {
++	return nil;
++}
++
++template<typename... Args> static inline void mvkDTRDiscardLogArgs(Args&&...) {}
++#define mvkDTRShaderLog(...) do { if (false) { mvkDTRDiscardLogArgs(__VA_ARGS__); } } while (false)
++
++static const char* mvkDTRInferMSLStage(const string& msl) {
++	if (msl.find("fragment ") != string::npos) { return "fragment"; }
++	if (msl.find("vertex ") != string::npos) { return "vertex"; }
++	if (msl.find("kernel ") != string::npos) { return "compute"; }
++	return "unknown";
++}
++
++static const char* mvkDTRShaderStageName(spv::ExecutionModel stage) {
++	switch (stage) {
++		case spv::ExecutionModelVertex: return "vertex";
++		case spv::ExecutionModelTessellationControl: return "tess-control";
++		case spv::ExecutionModelTessellationEvaluation: return "tess-eval";
++		case spv::ExecutionModelFragment: return "fragment";
++		case spv::ExecutionModelGLCompute: return "compute";
++		default: return "unknown";
++	}
++}
++
++static void mvkDTRLogLargeShaderResources(const SPIRVToMSLConversionConfiguration* pShaderConfig,
++										   const SPIRVToMSLConversionResult& conversionResult,
++										   size_t moduleHash) {
++	if ( !mvkDTRShaderResourceLogEnabled() ) { return; }
++
++	uint32_t minCount = mvkDTRShaderResourceLogMinCount();
++	for (const auto& rb : pShaderConfig->resourceBindings) {
++		const auto& rbb = rb.resourceBinding;
++		if (rbb.stage != pShaderConfig->options.entryPointStage || rbb.count < minCount) { continue; }
++
++		mvkDTRShaderLog("large shader resource stage=%s entry=%s module=%016zx set=%u binding=%u count=%u used=%u basetype=%u msl_buffer=%u msl_texture=%u msl_sampler=%u msl_bytes=%zu arg_buffers=%u pad_arg_buffers=%u",
++						 mvkDTRShaderStageName(pShaderConfig->options.entryPointStage),
++						 pShaderConfig->options.entryPointName.c_str(),
++						 moduleHash,
++						 rbb.desc_set,
++						 rbb.binding,
++						 rbb.count,
++						 rb.outIsUsedByShader ? 1 : 0,
++						 (uint32_t)rbb.basetype,
++						 rbb.msl_buffer,
++						 rbb.msl_texture,
++						 rbb.msl_sampler,
++						 conversionResult.msl.size(),
++						 pShaderConfig->options.mslOptions.argument_buffers ? 1 : 0,
++						 pShaderConfig->options.mslOptions.pad_argument_buffer_resources ? 1 : 0);
++	}
++}
++
++static NSString* mvkDTRShaderSlowDumpDir() {
++	return nil;
++}
++
++static void mvkDTRDumpSlowShader(const string& msl, const char* stage, size_t mslHash, uint64_t compileNanos) {
++	NSString* dumpDir = mvkDTRShaderSlowDumpDir();
++	if ( !dumpDir ) { return; }
++
++	@autoreleasepool {
++		[[NSFileManager defaultManager] createDirectoryAtPath: dumpDir withIntermediateDirectories: YES attributes: nil error: nil];
++		NSString* fileName = [NSString stringWithFormat: @"slow-%s-%016zx-%.0fms.metal", stage, mslHash, (double)compileNanos / 1e6];
++		NSString* filePath = [dumpDir stringByAppendingPathComponent: fileName];
++		FILE* file = fopen(filePath.fileSystemRepresentation, "wb");
++		if ( !file ) { return; }
++		fwrite(msl.data(), 1, msl.size(), file);
++		fclose(file);
++		mvkDTRShaderLog("slow shader source dumped path=%s", filePath.UTF8String);
++	}
++}
++
++struct MVKDTRMSLLibraryCacheKey {
++	const void* device = nullptr;
++	uint64_t deviceRegistryID = 0;
++	size_t deviceNameHash = 0;
++	size_t mslHash = 0;
++	size_t mslSize = 0;
++	size_t macroHash = 0;
++	size_t macroCount = 0;
++	uint32_t fpFastMathFlags = 0;
++	bool isPositionInvariant = false;
++
++	bool operator==(const MVKDTRMSLLibraryCacheKey& other) const {
++		return device == other.device &&
++			   deviceRegistryID == other.deviceRegistryID &&
++			   deviceNameHash == other.deviceNameHash &&
++			   mslHash == other.mslHash &&
++			   mslSize == other.mslSize &&
++			   macroHash == other.macroHash &&
++			   macroCount == other.macroCount &&
++			   fpFastMathFlags == other.fpFastMathFlags &&
++			   isPositionInvariant == other.isPositionInvariant;
++	}
++};
++
++struct MVKDTRMSLLibraryCacheKeyHasher {
++	size_t operator()(const MVKDTRMSLLibraryCacheKey& key) const {
++		size_t h = key.mslHash;
++		h ^= (size_t)key.deviceRegistryID + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
++		h ^= key.deviceNameHash + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
++		h ^= key.mslSize + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
++		h ^= key.macroHash + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
++		h ^= key.macroCount + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
++		h ^= (size_t)key.fpFastMathFlags + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
++		h ^= (uintptr_t)key.device + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
++		h ^= (size_t)key.isPositionInvariant + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
++		return h;
++	}
++};
++
++struct MVKDTRMSLLibraryCacheEntry {
++	~MVKDTRMSLLibraryCacheEntry() { [library release]; }
++
++	mutex lock;
++	condition_variable cv;
++	id<MTLLibrary> library = nil;
++	bool compiling = true;
++};
++
++using MVKDTRMSLLibraryCache = unordered_map<MVKDTRMSLLibraryCacheKey, shared_ptr<MVKDTRMSLLibraryCacheEntry>, MVKDTRMSLLibraryCacheKeyHasher>;
++
++static MVKDTRMSLLibraryCache& mvkDTRMSLLibraryCache() {
++	static MVKDTRMSLLibraryCache cache;
++	return cache;
++}
++
++static mutex& mvkDTRMSLLibraryCacheLock() {
++	static mutex cacheLock;
++	return cacheLock;
++}
++
++static size_t mvkDTRHashMSLMacros(const vector<pair<MSLSpecializationMacroInfo, MVKShaderMacroValue>>& macroDef) {
++	size_t h = macroDef.size();
++	for (const auto& md : macroDef) {
++		h ^= mvkHash(md.first.name.data(), md.first.name.size()) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
++		h ^= (size_t)md.first.isFloat + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
++		h ^= (size_t)md.first.isSigned + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
++		h ^= md.second.value.ui64 + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
++		h ^= md.second.size + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
++	}
++	return h;
++}
++
++static size_t mvkDTRHashMTLDeviceName(id<MTLDevice> mtlDevice) {
++	const char* name = mtlDevice.name ? mtlDevice.name.UTF8String : "";
++	return mvkHash(name, strlen(name));
++}
++
++static bool mvkDTRParseMSLHashLine(const char* line, size_t& mslHash) {
++	const char* hashStart = strstr(line, "msl_hash=");
++	if (hashStart) {
++		hashStart += strlen("msl_hash=");
++	} else {
++		hashStart = line;
++		while (*hashStart && !isxdigit((unsigned char)*hashStart)) { hashStart++; }
++	}
++
++	if ( !isxdigit((unsigned char)*hashStart) ) { return false; }
++	char* hashEnd = nullptr;
++	unsigned long long parsedHash = strtoull(hashStart, &hashEnd, 16);
++	if (hashEnd == hashStart) { return false; }
++	mslHash = (size_t)parsedHash;
++	return true;
++}
++
++static const unordered_set<size_t>* mvkDTRMSLLibraryDiskCacheFilter() {
++	static bool enabled = false;
++	static unordered_set<size_t> hashes;
++	static once_flag initOnce;
++
++	call_once(initOnce, [&] {
++		@autoreleasepool {
++			NSString* filterPath = mvkDTRMSLLibraryDiskCacheFilterPath();
++			if ( !filterPath ) { return; }
++			enabled = true;
++
++			FILE* filterFile = fopen(filterPath.fileSystemRepresentation, "r");
++			if ( !filterFile ) {
++				if (mvkDTRShaderCacheLogEnabled()) {
++					mvkDTRShaderLog("MSL disk library cache filter open failed path=%s", filterPath.UTF8String);
++				}
++				return;
++			}
++
++			char line[512];
++			while (fgets(line, sizeof(line), filterFile)) {
++				size_t mslHash = 0;
++				if (mvkDTRParseMSLHashLine(line, mslHash)) { hashes.insert(mslHash); }
++			}
++			fclose(filterFile);
++
++			if (mvkDTRShaderCacheLogEnabled()) {
++				mvkDTRShaderLog("MSL disk library cache filter loaded path=%s hashes=%zu", filterPath.UTF8String, hashes.size());
++			}
++		}
++	});
++
++	return enabled ? &hashes : nullptr;
++}
++
++static bool mvkDTRMSLLibraryDiskCacheAllowsKey(const MVKDTRMSLLibraryCacheKey& key) {
++	const unordered_set<size_t>* filter = mvkDTRMSLLibraryDiskCacheFilter();
++	return !filter || filter->count(key.mslHash) != 0;
++}
++
++static bool mvkDTRMSLLibraryDiskCacheShouldDumpSource(const MVKDTRMSLLibraryCacheKey& key, uint64_t compileNanos) {
++	if ( !mvkDTRMSLLibraryDiskCacheEnabled() || key.macroCount != 0 ) { return false; }
++
++	const unordered_set<size_t>* filter = mvkDTRMSLLibraryDiskCacheFilter();
++	if ( !filter || filter->count(key.mslHash) != 0 ) { return true; }
++
++	return compileNanos >= mvkDTRShaderSlowCompileThresholdNS();
++}
++
++static NSString* mvkDTRMSLLibraryDiskCacheBaseName(const MVKDTRMSLLibraryCacheKey& key) {
++	char name[256];
++	snprintf(name, sizeof(name), "msl-v1-d%016llx-n%016zx-h%016zx-s%zx-m%016zx-c%zx-f%08x-i%u",
++			 (unsigned long long)key.deviceRegistryID,
++			 key.deviceNameHash,
++			 key.mslHash,
++			 key.mslSize,
++			 key.macroHash,
++			 key.macroCount,
++			 key.fpFastMathFlags,
++			 key.isPositionInvariant ? 1 : 0);
++	return [NSString stringWithUTF8String: name];
++}
++
++static NSString* mvkDTRMSLLibraryDiskCachePath(const MVKDTRMSLLibraryCacheKey& key, NSString* extension) {
++	NSString* cacheDir = mvkDTRMSLLibraryDiskCacheDir();
++	if ( !cacheDir ) { return nil; }
++	NSString* fileName = [mvkDTRMSLLibraryDiskCacheBaseName(key) stringByAppendingPathExtension: extension];
++	return [cacheDir stringByAppendingPathComponent: fileName];
++}
++
++static id<MTLLibrary> mvkDTRLoadMSLLibraryFromDisk(id<MTLDevice> mtlDevice,
++											 const MVKDTRMSLLibraryCacheKey& key,
++											 uint64_t& loadNanos) {
++	loadNanos = 0;
++	if ( !mvkDTRMSLLibraryDiskCacheEnabled() || key.macroCount != 0 || !mvkDTRMSLLibraryDiskCacheAllowsKey(key) ) { return nil; }
++
++	@autoreleasepool {
++		NSString* metallibPath = mvkDTRMSLLibraryDiskCachePath(key, @"metallib");
++		if ( ![[NSFileManager defaultManager] fileExistsAtPath: metallibPath] ) { return nil; }
++
++		NSError* error = nil;
++		uint64_t start = mvkGetTimestamp();
++		id<MTLLibrary> lib = [mtlDevice newLibraryWithURL: [NSURL fileURLWithPath: metallibPath] error: &error];
++		loadNanos = mvkGetElapsedNanoseconds(start);
++		if (lib) {
++			if (mvkDTRShaderCacheLogEnabled()) {
++				mvkDTRShaderLog("MSL disk library cache hit path=%s msl_hash=%016zx msl_bytes=%zu load=%.1fms",
++								 metallibPath.UTF8String,
++								 key.mslHash,
++								 key.mslSize,
++								 (double)loadNanos / 1e6);
++			}
++			return lib;
++		}
++
++		if (mvkDTRShaderCacheLogEnabled()) {
++			mvkDTRShaderLog("MSL disk library cache load failed path=%s msl_hash=%016zx error=%s",
++							 metallibPath.UTF8String,
++							 key.mslHash,
++							 error ? error.localizedDescription.UTF8String : "<unknown>");
++		}
++		return nil;
++	}
++}
++
++static void mvkDTRDumpMSLLibraryDiskCacheSource(const MVKDTRMSLLibraryCacheKey& key, const string& msl, uint64_t compileNanos) {
++	if ( !mvkDTRMSLLibraryDiskCacheShouldDumpSource(key, compileNanos) ) { return; }
++
++	static mutex dumpLock;
++	lock_guard<mutex> lock(dumpLock);
++	@autoreleasepool {
++		NSString* cacheDir = mvkDTRMSLLibraryDiskCacheDir();
++		[[NSFileManager defaultManager] createDirectoryAtPath: cacheDir withIntermediateDirectories: YES attributes: nil error: nil];
++
++		NSString* metalPath = mvkDTRMSLLibraryDiskCachePath(key, @"metal");
++		if ( ![[NSFileManager defaultManager] fileExistsAtPath: metalPath] ) {
++			FILE* metalFile = fopen(metalPath.fileSystemRepresentation, "wb");
++			if (metalFile) {
++				fwrite(msl.data(), 1, msl.size(), metalFile);
++				fclose(metalFile);
++			}
++		}
++
++		NSString* metaPath = mvkDTRMSLLibraryDiskCachePath(key, @"meta");
++		if ( ![[NSFileManager defaultManager] fileExistsAtPath: metaPath] ) {
++			NSString* metallibPath = mvkDTRMSLLibraryDiskCachePath(key, @"metallib");
++			FILE* metaFile = fopen(metaPath.fileSystemRepresentation, "wb");
++			if (metaFile) {
++				fprintf(metaFile, "metal=%s\n", metalPath.UTF8String);
++				fprintf(metaFile, "metallib=%s\n", metallibPath.UTF8String);
++				fprintf(metaFile, "msl_hash=%016zx\n", key.mslHash);
++				fprintf(metaFile, "msl_bytes=%zu\n", key.mslSize);
++				fprintf(metaFile, "fp_fast_math_flags=%u\n", key.fpFastMathFlags);
++				fprintf(metaFile, "is_position_invariant=%u\n", key.isPositionInvariant ? 1 : 0);
++				fprintf(metaFile, "macro_count=%zu\n", key.macroCount);
++				fprintf(metaFile, "command_hint=xcrun -sdk macosx metal -o '%s' '%s'\n",
++						metallibPath.UTF8String,
++						metalPath.UTF8String);
++				fclose(metaFile);
++			}
++		}
++	}
++}
++
++static shared_ptr<MVKDTRMSLLibraryCacheEntry> mvkDTRGetMSLLibraryCacheEntry(const MVKDTRMSLLibraryCacheKey& key,
++															 bool& shouldCompile) {
++	lock_guard<mutex> lock(mvkDTRMSLLibraryCacheLock());
++	auto& cache = mvkDTRMSLLibraryCache();
++	auto iter = cache.find(key);
++	if (iter != cache.end()) {
++		shouldCompile = false;
++		return iter->second;
++	}
++
++	shouldCompile = true;
++	auto entry = make_shared<MVKDTRMSLLibraryCacheEntry>();
++	cache[key] = entry;
++	return entry;
++}
++
++static void mvkDTRRemoveMSLLibraryCacheEntry(const MVKDTRMSLLibraryCacheKey& key,
++											 const shared_ptr<MVKDTRMSLLibraryCacheEntry>& entry) {
++	lock_guard<mutex> lock(mvkDTRMSLLibraryCacheLock());
++	auto& cache = mvkDTRMSLLibraryCache();
++	auto iter = cache.find(key);
++	if (iter != cache.end() && iter->second == entry) { cache.erase(iter); }
++}
++
++static id<MTLLibrary> mvkDTRNewMTLLibrary(MVKShaderLibraryCompiler* slc,
++									 id<MTLDevice> mtlDevice,
++									 NSString* nsSrc,
++									 const string& msl,
++									 const SPIRVToMSLConversionResultInfo& shaderConversionResultInfo,
++									 const vector<pair<MSLSpecializationMacroInfo, MVKShaderMacroValue>>& macroDef,
++									 uint64_t& compileNanos,
++									 bool& cacheHit,
++									 bool& diskCacheHit) {
++	compileNanos = 0;
++	cacheHit = false;
++	diskCacheHit = false;
++	bool processCacheEnabled = mvkDTRMSLLibraryCacheEnabled();
++	bool diskCacheEnabled = mvkDTRMSLLibraryDiskCacheEnabled();
++	if ( !processCacheEnabled && !diskCacheEnabled ) {
++		uint64_t start = mvkGetTimestamp();
++		id<MTLLibrary> lib = slc->newMTLLibrary(nsSrc, shaderConversionResultInfo, macroDef);
++		compileNanos = mvkGetElapsedNanoseconds(start);
++		return lib;
++	}
++
++	MVKDTRMSLLibraryCacheKey key;
++	key.device = mtlDevice;
++	key.deviceRegistryID = mtlDevice.registryID;
++	key.deviceNameHash = mvkDTRHashMTLDeviceName(mtlDevice);
++	key.mslHash = mvkHash(msl.data(), msl.size());
++	key.mslSize = msl.size();
++	key.macroHash = mvkDTRHashMSLMacros(macroDef);
++	key.macroCount = macroDef.size();
++	key.fpFastMathFlags = shaderConversionResultInfo.entryPoint.fpFastMathFlags;
++	key.isPositionInvariant = shaderConversionResultInfo.isPositionInvariant;
++
++	bool shouldCompile = false;
++	auto entry = mvkDTRGetMSLLibraryCacheEntry(key, shouldCompile);
++	if ( !shouldCompile ) {
++		uint64_t waitStart = mvkGetTimestamp();
++		unique_lock<mutex> entryLock(entry->lock);
++		while (entry->compiling) { entry->cv.wait(entryLock); }
++		compileNanos = mvkGetElapsedNanoseconds(waitStart);
++		cacheHit = true;
++		return entry->library ? [entry->library retain] : nil;
++	}
++
++	if (diskCacheEnabled) {
++		id<MTLLibrary> diskLib = mvkDTRLoadMSLLibraryFromDisk(mtlDevice, key, compileNanos);
++		if (diskLib) {
++			diskCacheHit = true;
++			{
++				lock_guard<mutex> entryLock(entry->lock);
++				entry->library = [diskLib retain];
++				entry->compiling = false;
++			}
++			entry->cv.notify_all();
++			return diskLib;
++		}
++	}
++
++	uint64_t start = mvkGetTimestamp();
++	id<MTLLibrary> lib = slc->newMTLLibrary(nsSrc, shaderConversionResultInfo, macroDef);
++	compileNanos = mvkGetElapsedNanoseconds(start);
++	if (lib) { mvkDTRDumpMSLLibraryDiskCacheSource(key, msl, compileNanos); }
++	{
++		lock_guard<mutex> entryLock(entry->lock);
++		entry->library = [lib retain];
++		entry->compiling = false;
++	}
++	entry->cv.notify_all();
++	if ( !lib ) { mvkDTRRemoveMSLLibraryCacheEntry(key, entry); }
++	return lib;
++}
++
+ MVKMTLFunction::MVKMTLFunction(id<MTLFunction> mtlFunc, const SPIRVToMSLConversionResultInfo scRslts, MTLSize tgSize) {
+ 	_mtlFunction = [mtlFunc retain];		// retained
+ 	shaderConversionResults = scRslts;
+@@ -241,7 +711,43 @@ static uint32_t getWorkgroupDimensionSize(const SPIRVWorkgroupSizeDimension& wgD
+ 		}
+ 	}
+ 
+-	_mtlLibrary = slc->newMTLLibrary(nsSrc, _shaderConversionResultInfo, macro_def);	// retained
++	uint64_t dtrCompileNanos = 0;
++	bool dtrMSLLibraryCacheHit = false;
++	bool dtrMSLLibraryDiskCacheHit = false;
++	_mtlLibrary = mvkDTRNewMTLLibrary(slc, getMTLDevice(), nsSrc, msl, _shaderConversionResultInfo, macro_def, dtrCompileNanos, dtrMSLLibraryCacheHit, dtrMSLLibraryDiskCacheHit);	// retained
++	if (mvkDTRShaderCacheLogEnabled() && dtrMSLLibraryDiskCacheHit) {
++		size_t mslHash = mvkHash(msl.data(), msl.size());
++		mvkDTRShaderLog("MSL library disk cache hit entry=%s msl_hash=%016zx msl_bytes=%zu macro_count=%zu load=%.1fms success=%s",
++						_shaderConversionResultInfo.entryPoint.mtlFunctionName.c_str(),
++						mslHash,
++						msl.size(),
++						macro_def.size(),
++						(double)dtrCompileNanos / 1e6,
++						_mtlLibrary ? "1" : "0");
++	}
++	if (mvkDTRShaderCacheLogEnabled() && dtrMSLLibraryCacheHit) {
++		size_t mslHash = mvkHash(msl.data(), msl.size());
++		mvkDTRShaderLog("MSL library cache hit entry=%s msl_hash=%016zx msl_bytes=%zu macro_count=%zu wait=%.1fms success=%s",
++						_shaderConversionResultInfo.entryPoint.mtlFunctionName.c_str(),
++						mslHash,
++						msl.size(),
++						macro_def.size(),
++						(double)dtrCompileNanos / 1e6,
++						_mtlLibrary ? "1" : "0");
++	}
++	if (mvkDTRShaderCacheLogEnabled() && !dtrMSLLibraryCacheHit && !dtrMSLLibraryDiskCacheHit && dtrCompileNanos >= mvkDTRShaderSlowCompileThresholdNS()) {
++		size_t mslHash = mvkHash(msl.data(), msl.size());
++		const char* stage = mvkDTRInferMSLStage(msl);
++		mvkDTRShaderLog("slow Metal library compile stage=%s entry=%s msl_hash=%016zx msl_bytes=%zu macro_count=%zu elapsed=%.1fms success=%s",
++						stage,
++						_shaderConversionResultInfo.entryPoint.mtlFunctionName.c_str(),
++						mslHash,
++						msl.size(),
++						macro_def.size(),
++						(double)dtrCompileNanos / 1e6,
++						_mtlLibrary ? "1" : "0");
++		mvkDTRDumpSlowShader(msl, stage, mslHash, dtrCompileNanos);
++	}
+ 	[nsSrc release];														// release temp string
+ 	slc->destroy();
+ }
+@@ -424,6 +930,7 @@ static uint32_t getWorkgroupDimensionSize(const SPIRVWorkgroupSizeDimension& wgD
+ 	uint64_t startTime = getPerformanceTimestamp();
+ 	bool wasConverted = _spvConverter.convert(*pShaderConfig, conversionResult, shouldLogCode, shouldLogCode, shouldLogEstimatedGLSL);
+ 	addPerformanceInterval(getPerformanceStats().shaderCompilation.spirvToMSL, startTime);
++	if (wasConverted) { mvkDTRLogLargeShaderResources(pShaderConfig, conversionResult, _key.codeHash); }
+ 
+ 	const char* dumpDir = getMVKConfig().shaderDumpDir;
+ 	if (dumpDir && *dumpDir) {
+@@ -741,4 +1248,3 @@ static uint32_t getWorkgroupDimensionSize(const SPIRVWorkgroupSizeDimension& wgD
+ MVKFunctionSpecializer::~MVKFunctionSpecializer() {
+ 	[_mtlFunction release];
+ }
+-
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKSurface.h b/MoltenVK/MoltenVK/GPUObjects/MVKSurface.h
+index 3f526c10..f38973f9 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKSurface.h
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKSurface.h
+@@ -80,7 +80,9 @@ protected:
+ 	void propagateDebugName() override {}
+ 	void setActiveSwapchain(MVKSwapchain* swapchain);
+ 	void initLayer(CAMetalLayer* mtlLayer, const char* vkFuncName, bool isHeadless);
++	void replaceLayer(CAMetalLayer* mtlLayer);
+ 	void releaseLayer();
++	void logNativeState(const char* stage);
+ 
+ 	std::mutex _layerLock;
+ 	MVKInstance* _mvkInstance = nullptr;
+@@ -88,4 +90,3 @@ protected:
+ 	MVKBlockObserver* _layerObserver = nil;
+ 	MVKSwapchain* _activeSwapchain = nullptr;
+ };
+-
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKSurface.mm b/MoltenVK/MoltenVK/GPUObjects/MVKSurface.mm
+index 87e6192c..f52f742a 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKSurface.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKSurface.mm
+@@ -22,9 +22,15 @@
+ #include "MVKFoundation.h"
+ #include "MVKOSExtensions.h"
+ #include "mvk_datatypes.hpp"
++#include <cstdarg>
++#include <cstdio>
++#include <cstdlib>
++#include <mutex>
++#include <pthread.h>
+ 
+ #import "CAMetalLayer+MoltenVK.h"
+ #import "MVKBlockObserver.h"
++#import <Foundation/NSMapTable.h>
+ 
+ #ifdef VK_USE_PLATFORM_IOS_MVK
+ #	define PLATFORM_VIEW_CLASS	UIView
+@@ -34,6 +40,8 @@
+ #ifdef VK_USE_PLATFORM_MACOS_MVK
+ #	define PLATFORM_VIEW_CLASS	NSView
+ #	import <AppKit/NSView.h>
++#	import <AppKit/NSScreen.h>
++#	import <AppKit/NSWindow.h>
+ #endif
+ 
+ 
+@@ -46,6 +54,311 @@
+ // once a swapchain is attached, but consensus amoung the spec authors is that it should not.
+ static constexpr VkExtent2D kMVKUndefinedExtent = {0xFFFFFFFF, 0xFFFFFFFF};
+ 
++static bool mvkDTRBoolEnvValue(const char* name, bool defaultValue) {
++	const char* env = getenv(name);
++	if ( !env ) { return defaultValue; }
++	while (*env == ' ' || *env == '\t' || *env == '\n' || *env == '\r') { env++; }
++	if (*env == '0') { return false; }
++	if (*env == '1') { return true; }
++	return defaultValue;
++}
++
++static bool mvkDTRSurfaceReplaceLayerEnabled() {
++	return mvkDTRBoolEnvValue("MVK_DTR_SURFACE_REPLACE_LAYER", false);
++}
++
++static bool mvkDTRSurfaceCacheWindowLayerEnabled() {
++	return mvkDTRBoolEnvValue("MVK_DTR_SURFACE_CACHE_WINDOW_LAYER", true);
++}
++
++static bool mvkDTRDisableLayerActionsEnabled() {
++	return mvkDTRBoolEnvValue("MVK_DTR_DISABLE_LAYER_ACTIONS", true);
++}
++
++static bool mvkDTRSurfaceStableWindowLayerEnabled() {
++	return mvkDTRBoolEnvValue("MVK_DTR_SURFACE_STABLE_WINDOW_LAYER", true);
++}
++
++[[maybe_unused]] static bool mvkDTRSurfaceLogEnabled() {
++	return false;
++}
++
++static bool mvkDTRSurfaceLogNativeEnabled() {
++	return false;
++}
++
++[[maybe_unused]] static uint64_t mvkDTRCurrentThreadID() {
++	uint64_t tid = 0;
++	pthread_threadid_np(pthread_self(), &tid);
++	return tid;
++}
++
++[[maybe_unused]] static NSString* mvkDTRSurfaceLogPath() {
++	return nil;
++}
++
++template<typename... Args> static inline void mvkDTRDiscardLogArgs(Args&&...) {}
++#define mvkDTRSurfaceLog(...) do { if (false) { mvkDTRDiscardLogArgs(__VA_ARGS__); } } while (false)
++
++static void mvkDTRLogLayerNativeState(const char* stage, const void* surface, CAMetalLayer* layer, const void* activeSwapchain) {
++	if ( !mvkDTRSurfaceLogNativeEnabled() ) { return; }
++
++	if ( !layer ) {
++		mvkDTRSurfaceLog("native state stage=%s surface=%p layer=0 active_swapchain=%p", stage, surface, activeSwapchain);
++		return;
++	}
++
++	mvkDispatchToMainAndWait(^{
++		@autoreleasepool {
++			id delegate = layer.delegate;
++			NSString* layerClass = NSStringFromClass(layer.class);
++			NSString* delegateClass = delegate ? NSStringFromClass([delegate class]) : @"";
++			CGRect bounds = layer.bounds;
++			CGRect frame = layer.frame;
++			CGPoint position = layer.position;
++			CGPoint anchor = layer.anchorPoint;
++			CGSize drawable = layer.drawableSize;
++			CGSize natural = layer.naturalDrawableSizeMVK;
++			mvkDTRSurfaceLog("native layer stage=%s surface=%p layer=%p class=%s delegate=%p delegate_class=%s superlayer=%p active_swapchain=%p bounds=%.1f,%.1f %.1fx%.1f frame=%.1f,%.1f %.1fx%.1f drawable=%.0fx%.0f natural=%.0fx%.0f contents_scale=%.3f position=%.1f,%.1f anchor=%.2f,%.2f hidden=%u opaque=%u opacity=%.3f name=%s",
++						 stage, surface, layer, layerClass.UTF8String, delegate, delegateClass.UTF8String, layer.superlayer, activeSwapchain,
++						 bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height,
++						 frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
++						 drawable.width, drawable.height, natural.width, natural.height, layer.contentsScale,
++						 position.x, position.y, anchor.x, anchor.y, layer.hidden ? 1 : 0, layer.opaque ? 1 : 0,
++						 layer.opacity, (layer.name ?: @"").UTF8String);
++
++#ifdef VK_USE_PLATFORM_MACOS_MVK
++			if ([delegate isKindOfClass: [PLATFORM_VIEW_CLASS class]]) {
++				PLATFORM_VIEW_CLASS* view = (PLATFORM_VIEW_CLASS*)delegate;
++				NSString* viewClass = NSStringFromClass(view.class);
++				CGRect viewFrame = view.frame;
++				CGRect viewBounds = view.bounds;
++				CGRect visibleRect = view.visibleRect;
++				mvkDTRSurfaceLog("native view stage=%s surface=%p view=%p class=%s layer=%p same_layer=%u superview=%p window=%p frame=%.1f,%.1f %.1fx%.1f bounds=%.1f,%.1f %.1fx%.1f visible=%.1f,%.1f %.1fx%.1f wants_layer=%u hidden=%u in_live_resize=%u",
++							 stage, surface, view, viewClass.UTF8String, view.layer, view.layer == layer ? 1 : 0, view.superview, view.window,
++							 viewFrame.origin.x, viewFrame.origin.y, viewFrame.size.width, viewFrame.size.height,
++							 viewBounds.origin.x, viewBounds.origin.y, viewBounds.size.width, viewBounds.size.height,
++							 visibleRect.origin.x, visibleRect.origin.y, visibleRect.size.width, visibleRect.size.height,
++							 view.wantsLayer ? 1 : 0, view.hidden ? 1 : 0, view.inLiveResize ? 1 : 0);
++				NSWindow* window = view.window;
++				if (window) {
++					CGRect windowFrame = window.frame;
++					CGRect contentFrame = window.contentView ? window.contentView.frame : CGRectZero;
++					NSScreen* screen = window.screen;
++					mvkDTRSurfaceLog("native window stage=%s surface=%p window=%p content_view=%p screen=%p title=%s frame=%.1f,%.1f %.1fx%.1f content=%.1f,%.1f %.1fx%.1f backing=%.3f visible=%u key=%u mini=%u fullscreen=%u style=0x%llx occlusion=0x%lx",
++								 stage, surface, window, window.contentView, screen, (window.title ?: @"").UTF8String,
++								 windowFrame.origin.x, windowFrame.origin.y, windowFrame.size.width, windowFrame.size.height,
++								 contentFrame.origin.x, contentFrame.origin.y, contentFrame.size.width, contentFrame.size.height,
++								 window.backingScaleFactor, window.visible ? 1 : 0, window.keyWindow ? 1 : 0, window.miniaturized ? 1 : 0,
++								 (window.styleMask & NSWindowStyleMaskFullScreen) ? 1 : 0, (unsigned long long)window.styleMask, (unsigned long)window.occlusionState);
++					if (screen) {
++						CGRect screenFrame = screen.frame;
++						CGRect visibleFrame = screen.visibleFrame;
++						NSNumber* screenNumber = [screen.deviceDescription objectForKey: @"NSScreenNumber"];
++						mvkDTRSurfaceLog("native screen stage=%s surface=%p screen=%p name=%s frame=%.1f,%.1f %.1fx%.1f visible=%.1f,%.1f %.1fx%.1f backing=%.3f number=%llu",
++									 stage, surface, screen, (screen.localizedName ?: @"").UTF8String,
++									 screenFrame.origin.x, screenFrame.origin.y, screenFrame.size.width, screenFrame.size.height,
++									 visibleFrame.origin.x, visibleFrame.origin.y, visibleFrame.size.width, visibleFrame.size.height,
++									 screen.backingScaleFactor, screenNumber ? screenNumber.unsignedLongLongValue : 0ull);
++					}
++				}
++			}
++#endif
++		}
++	});
++}
++
++#ifdef VK_USE_PLATFORM_MACOS_MVK
++static void mvkDTRRunWithDisabledLayerActions(void (^block)(void)) {
++	if ( !mvkDTRDisableLayerActionsEnabled() ) {
++		block();
++		return;
++	}
++
++	[CATransaction begin];
++	[CATransaction setDisableActions: YES];
++	[CATransaction setAnimationDuration: 0.0];
++	block();
++	[CATransaction commit];
++}
++
++static NSDictionary* mvkDTRDisabledLayerActions() {
++	static NSDictionary* disabledActions = [@{
++		@"anchorPoint": [NSNull null],
++		@"backgroundColor": [NSNull null],
++		@"bounds": [NSNull null],
++		@"contents": [NSNull null],
++		@"contentsGravity": [NSNull null],
++		@"contentsScale": [NSNull null],
++		@"drawableSize": [NSNull null],
++		@"frame": [NSNull null],
++		@"hidden": [NSNull null],
++		@"opacity": [NSNull null],
++		@"position": [NSNull null],
++		@"sublayers": [NSNull null],
++		@"transform": [NSNull null],
++		@"zPosition": [NSNull null],
++		kCAOnOrderIn: [NSNull null],
++		kCAOnOrderOut: [NSNull null],
++		kCATransition: [NSNull null],
++	} retain];
++	return disabledActions;
++}
++
++static void mvkDTRInstallDisabledLayerActions(CALayer* layer) {
++	if ( !mvkDTRDisableLayerActionsEnabled() || !layer ) { return; }
++
++	NSMutableDictionary* actions = layer.actions ? [layer.actions mutableCopy] : [NSMutableDictionary new];
++	[actions addEntriesFromDictionary: mvkDTRDisabledLayerActions()];
++	layer.actions = actions;
++	[actions release];
++}
++
++static NSMapTable* mvkDTRSurfaceWindowLayerCache() {
++	static NSMapTable* cache = [[NSMapTable weakToStrongObjectsMapTable] retain];
++	return cache;
++}
++
++static NSMapTable* mvkDTRSurfaceWindowHostLayerCache() {
++	static NSMapTable* cache = [[NSMapTable weakToStrongObjectsMapTable] retain];
++	return cache;
++}
++
++static void mvkDTRCopyReusableLayerState(CAMetalLayer* dstLayer, CAMetalLayer* srcLayer) {
++	if ( !dstLayer || !srcLayer || dstLayer == srcLayer ) { return; }
++	CGSize srcDrawableSize = srcLayer.drawableSize;
++
++	dstLayer.bounds = srcLayer.bounds;
++	dstLayer.frame = srcLayer.frame;
++	dstLayer.position = srcLayer.position;
++	dstLayer.anchorPoint = srcLayer.anchorPoint;
++	dstLayer.contentsScale = srcLayer.contentsScale;
++	if (srcDrawableSize.width > 0.0 && srcDrawableSize.height > 0.0) {
++		dstLayer.drawableSize = srcDrawableSize;
++	} else {
++		mvkDTRSurfaceLog("window layer cache skip drawableSize copy dst_layer=%p src_layer=%p drawable=%.0fx%.0f", dstLayer, srcLayer, srcDrawableSize.width, srcDrawableSize.height);
++	}
++	dstLayer.hidden = srcLayer.hidden;
++	dstLayer.opaque = srcLayer.opaque;
++	dstLayer.opacity = srcLayer.opacity;
++	dstLayer.contentsGravity = srcLayer.contentsGravity;
++	dstLayer.masksToBounds = srcLayer.masksToBounds;
++}
++
++static bool mvkDTRAttachCachedLayerToStableWindowHost(const void* surface, NSWindow* window, PLATFORM_VIEW_CLASS* view, CAMetalLayer* cachedLayer) {
++	if ( !mvkDTRSurfaceStableWindowLayerEnabled() ) { return false; }
++	if ( !window || !view || !cachedLayer ) { return false; }
++
++	NSView* contentView = window.contentView;
++	if ( !contentView ) {
++		mvkDTRSurfaceLog("window stable layer skipped surface=%p window=%p view=%p layer=%p reason=no_content_view", surface, window, view, cachedLayer);
++		return false;
++	}
++
++	if ( !contentView.wantsLayer ) { contentView.wantsLayer = YES; }
++	CALayer* contentLayer = contentView.layer;
++	if ( !contentLayer ) {
++		mvkDTRSurfaceLog("window stable layer skipped surface=%p window=%p view=%p layer=%p reason=no_content_layer", surface, window, view, cachedLayer);
++		return false;
++	}
++
++	NSMapTable* hostCache = mvkDTRSurfaceWindowHostLayerCache();
++	CALayer* hostLayer = [hostCache objectForKey: window];
++	if ( !hostLayer ) {
++		hostLayer = [CALayer layer];
++		hostLayer.name = @"MoltenVK stable window layer host";
++		[hostCache setObject: hostLayer forKey: window];
++		mvkDTRSurfaceLog("window stable host layer store surface=%p window=%p content_view=%p content_layer=%p host_layer=%p", surface, window, contentView, contentLayer, hostLayer);
++	}
++
++	CALayer* oldSuperlayer = cachedLayer.superlayer;
++	CGRect hostBounds = contentView.bounds;
++	CGRect viewFrame = [view convertRect: view.bounds toView: contentView];
++	mvkDTRRunWithDisabledLayerActions(^{
++		mvkDTRInstallDisabledLayerActions(contentLayer);
++		mvkDTRInstallDisabledLayerActions(hostLayer);
++		mvkDTRInstallDisabledLayerActions(cachedLayer);
++
++		hostLayer.anchorPoint = CGPointZero;
++		hostLayer.bounds = CGRectMake(0.0, 0.0, hostBounds.size.width, hostBounds.size.height);
++		hostLayer.position = CGPointZero;
++		hostLayer.hidden = NO;
++		hostLayer.opacity = 1.0;
++		hostLayer.masksToBounds = YES;
++		hostLayer.zPosition = 1000000.0;
++		hostLayer.contentsScale = cachedLayer.contentsScale;
++		if (hostLayer.superlayer != contentLayer) { [contentLayer addSublayer: hostLayer]; }
++
++		cachedLayer.anchorPoint = CGPointZero;
++		cachedLayer.bounds = CGRectMake(0.0, 0.0, viewFrame.size.width, viewFrame.size.height);
++		cachedLayer.position = viewFrame.origin;
++		cachedLayer.zPosition = 0.0;
++		if (cachedLayer.superlayer != hostLayer) { [hostLayer addSublayer: cachedLayer]; }
++		cachedLayer.delegate = (id<CALayerDelegate>)view;
++	});
++
++	mvkDTRSurfaceLog("window stable layer attach surface=%p window=%p view=%p content_layer=%p host_layer=%p layer=%p old_superlayer=%p new_superlayer=%p frame=%.1f,%.1f %.1fx%.1f",
++					 surface, window, view, contentLayer, hostLayer, cachedLayer, oldSuperlayer, cachedLayer.superlayer,
++					 viewFrame.origin.x, viewFrame.origin.y, viewFrame.size.width, viewFrame.size.height);
++	return true;
++}
++
++static CAMetalLayer* mvkDTRSurfaceCachedWindowLayer(const void* surface, CAMetalLayer* mtlLayer, const char* vkFuncName) {
++	if ( !mvkDTRSurfaceCacheWindowLayerEnabled() || !mtlLayer ) { return mtlLayer; }
++
++	__block CAMetalLayer* resolvedLayer = mtlLayer;
++	mvkDispatchToMainAndWait(^{
++		@autoreleasepool {
++			id delegate = mtlLayer.delegate;
++			if ( ![delegate isKindOfClass: [PLATFORM_VIEW_CLASS class]] ) {
++				mvkDTRSurfaceLog("window layer cache skipped surface=%p func=%s layer=%p delegate=%p reason=non_view_delegate", surface, vkFuncName, mtlLayer, delegate);
++				return;
++			}
++
++			PLATFORM_VIEW_CLASS* view = (PLATFORM_VIEW_CLASS*)delegate;
++			NSWindow* window = view.window;
++			if ( !window ) {
++				mvkDTRSurfaceLog("window layer cache skipped surface=%p func=%s layer=%p view=%p reason=no_window", surface, vkFuncName, mtlLayer, view);
++				return;
++			}
++			if ( !window.visible || CGRectIsEmpty(view.bounds) || CGRectIsEmpty(window.contentView.bounds) ) {
++				mvkDTRSurfaceLog("window layer cache skipped surface=%p func=%s layer=%p view=%p window=%p reason=window_not_ready", surface, vkFuncName, mtlLayer, view, window);
++				return;
++			}
++
++			NSMapTable* cache = mvkDTRSurfaceWindowLayerCache();
++			CAMetalLayer* cachedLayer = [cache objectForKey: window];
++			if ( !cachedLayer ) {
++				mvkDTRInstallDisabledLayerActions(mtlLayer);
++				[cache setObject: mtlLayer forKey: window];
++				mvkDTRSurfaceLog("window layer cache store surface=%p func=%s window=%p view=%p layer=%p", surface, vkFuncName, window, view, mtlLayer);
++				return;
++			}
++
++			if ( cachedLayer == mtlLayer ) {
++				mvkDTRInstallDisabledLayerActions(cachedLayer);
++				mvkDTRSurfaceLog("window layer cache same surface=%p func=%s window=%p view=%p layer=%p", surface, vkFuncName, window, view, mtlLayer);
++				return;
++			}
++
++			mvkDTRRunWithDisabledLayerActions(^{
++				mvkDTRInstallDisabledLayerActions(cachedLayer);
++				mvkDTRCopyReusableLayerState(cachedLayer, mtlLayer);
++				if ( !mvkDTRAttachCachedLayerToStableWindowHost(surface, window, view, cachedLayer) ) {
++					if ( !view.wantsLayer ) { view.wantsLayer = YES; }
++					if ( view.layer != cachedLayer ) { view.layer = cachedLayer; }
++					cachedLayer.delegate = (id<CALayerDelegate>)view;
++				}
++			});
++			resolvedLayer = cachedLayer;
++			mvkDTRSurfaceLog("window layer cache hit surface=%p func=%s window=%p view=%p provided_layer=%p cached_layer=%p", surface, vkFuncName, window, view, mtlLayer, cachedLayer);
++		}
++	});
++
++	return resolvedLayer;
++}
++#endif
++
+ 
+ #pragma mark MVKSurface
+ 
+@@ -63,7 +376,9 @@
+ }
+ 
+ void MVKSurface::setActiveSwapchain(MVKSwapchain* swapchain) {
++	mvkDTRSurfaceLog("set active swapchain surface=%p old=%p new=%p layer=%p", this, _activeSwapchain, swapchain, _mtlCAMetalLayer);
+ 	_activeSwapchain = swapchain;
++	logNativeState("set active swapchain");
+ }
+ 
+ MVKSurface::MVKSurface(MVKInstance* mvkInstance,
+@@ -99,20 +414,60 @@
+ 
+ void MVKSurface::initLayer(CAMetalLayer* mtlLayer, const char* vkFuncName, bool isHeadless) {
+ 
++#ifdef VK_USE_PLATFORM_MACOS_MVK
++	mtlLayer = mvkDTRSurfaceCachedWindowLayer(this, mtlLayer, vkFuncName);
++#endif
+ 	_mtlCAMetalLayer = [mtlLayer retain];	// retained
++	mvkDTRSurfaceLog("init layer surface=%p func=%s layer=%p delegate=%p headless=%u replace_env=%u cache_window_layer_env=%u stable_window_layer_env=%u disable_actions_env=%u", this, vkFuncName, _mtlCAMetalLayer, _mtlCAMetalLayer.delegate, isHeadless ? 1 : 0, mvkDTRSurfaceReplaceLayerEnabled() ? 1 : 0, mvkDTRSurfaceCacheWindowLayerEnabled() ? 1 : 0, mvkDTRSurfaceStableWindowLayerEnabled() ? 1 : 0, mvkDTRDisableLayerActionsEnabled() ? 1 : 0);
++	logNativeState("init layer");
+ 	if ( !_mtlCAMetalLayer && !isHeadless ) { setConfigurationResult(reportError(VK_ERROR_SURFACE_LOST_KHR, "%s(): On-screen rendering requires a layer of type CAMetalLayer.", vkFuncName)); }
+ 
+-	// Sometimes, the owning view can replace its CAMetalLayer.
+-	// When that happens, the app needs to recreate the surface.
+-	if ([_mtlCAMetalLayer.delegate isKindOfClass: [PLATFORM_VIEW_CLASS class]]) {
+-		_layerObserver = [MVKBlockObserver observerWithBlock: ^(NSString* path, id, NSDictionary*, void*) {
+-			if ([path isEqualToString: @"layer"]) { this->releaseLayer(); }
++	// Layer replacement tracking is fragile during CrossOver startup, so keep it opt-in.
++	if (mvkDTRSurfaceReplaceLayerEnabled() && [_mtlCAMetalLayer.delegate isKindOfClass: [PLATFORM_VIEW_CLASS class]]) {
++		_layerObserver = [MVKBlockObserver observerWithBlock: ^(NSString* path, id object, NSDictionary*, void*) {
++			if ([path isEqualToString: @"layer"]) {
++				mvkDTRSurfaceLog("observed view layer change surface=%p object=%p old_layer=%p active_swapchain=%p replace_env=%u", this, object, this->_mtlCAMetalLayer, this->_activeSwapchain, mvkDTRSurfaceReplaceLayerEnabled() ? 1 : 0);
++				this->logNativeState("observed view layer change");
++				if ([object isKindOfClass: [PLATFORM_VIEW_CLASS class]]) {
++					__block CAMetalLayer* replacementLayer = nil;
++					mvkDispatchToMainAndWait(^{
++						CALayer* viewLayer = ((PLATFORM_VIEW_CLASS*)object).layer;
++						if ([viewLayer isKindOfClass: CAMetalLayer.class]) { replacementLayer = [(CAMetalLayer*)viewLayer retain]; }
++					});
++					mvkDTRSurfaceLog("view layer replacement lookup surface=%p replacement=%p", this, replacementLayer);
++					if (replacementLayer) {
++						this->replaceLayer(replacementLayer);
++						[replacementLayer release];
++						return;
++					}
++				}
++				this->releaseLayer();
++			}
+ 		} forObject: _mtlCAMetalLayer.delegate atKeyPath: @"layer"];
+ 	}
+ }
+ 
++void MVKSurface::replaceLayer(CAMetalLayer* mtlLayer) {
++	{
++		std::lock_guard<std::mutex> lock(_layerLock);
++		if ( !mtlLayer || _mtlCAMetalLayer == mtlLayer ) { return; }
++
++		mvkDTRSurfaceLog("replace layer surface=%p old_layer=%p new_layer=%p active_swapchain=%p", this, _mtlCAMetalLayer, mtlLayer, _activeSwapchain);
++		[mtlLayer retain];
++		[_mtlCAMetalLayer release];
++		_mtlCAMetalLayer = mtlLayer;
++		clearConfigurationResult();
++		if (_activeSwapchain) { _activeSwapchain->setConfigurationResult(VK_ERROR_OUT_OF_DATE_KHR); }
++		mvkDTRSurfaceLog("replace layer complete surface=%p layer=%p active_swapchain=%p", this, _mtlCAMetalLayer, _activeSwapchain);
++	}
++	logNativeState("replace layer complete");
++	MVKLogInfo("Replaced CAMetalLayer on existing VkSurfaceKHR and marked active swapchain out of date.");
++}
++
+ void MVKSurface::releaseLayer() {
++	logNativeState("release layer");
+ 	std::lock_guard<std::mutex> lock(_layerLock);
++	mvkDTRSurfaceLog("release layer surface=%p layer=%p active_swapchain=%p", this, _mtlCAMetalLayer, _activeSwapchain);
+ 	setConfigurationResult(VK_ERROR_SURFACE_LOST_KHR);
+ 	[_mtlCAMetalLayer release];
+ 	_mtlCAMetalLayer = nil;
+@@ -120,7 +475,21 @@
+ 	_layerObserver = nil;
+ }
+ 
++void MVKSurface::logNativeState(const char* stage) {
++	if ( !mvkDTRSurfaceLogNativeEnabled() ) { return; }
++
++	CAMetalLayer* layer = nil;
++	MVKSwapchain* activeSwapchain = nullptr;
++	{
++		std::lock_guard<std::mutex> lock(_layerLock);
++		layer = [_mtlCAMetalLayer retain];
++		activeSwapchain = _activeSwapchain;
++	}
++
++	mvkDTRLogLayerNativeState(stage, this, layer, activeSwapchain);
++	[layer release];
++}
++
+ MVKSurface::~MVKSurface() {
+ 	releaseLayer();
+ }
+-
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.h b/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.h
+index 1665b514..6b91ad61 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.h
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.h
+@@ -85,6 +85,9 @@ public:
+ 	/** Returns the status of the surface. Surface loss takes precedence over sub-optimal errors. */
+ 	VkResult getSurfaceStatus();
+ 
++	/** Returns the number of queued presentations that have not yet displayed. */
++	uint32_t getUnpresentedImageCount() { return _unpresentedImageCount.load(); }
++
+ 	/** Adds HDR metadata to this swapchain. */
+ 	void setHDRMetadataEXT(const VkHdrMetadataEXT& metadata);
+ 	
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.mm b/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.mm
+index 4c908669..3d8911a8 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.mm
+@@ -26,7 +26,12 @@
+ #include "MVKWatermarkTextureContent.h"
+ #include "MVKWatermarkShaderSource.h"
+ #include "mvk_datatypes.hpp"
++#include <cstdarg>
++#include <cstdio>
++#include <cstdlib>
+ #include <libkern/OSByteOrder.h>
++#include <mutex>
++#include <pthread.h>
+ 
+ #import "CAMetalLayer+MoltenVK.h"
+ #import "MVKBlockObserver.h"
+@@ -35,6 +40,63 @@
+ using namespace std;
+ 
+ 
++static bool mvkDTRBoolEnvValue(const char* name, bool defaultValue) {
++	const char* env = getenv(name);
++	if ( !env ) { return defaultValue; }
++	while (*env == ' ' || *env == '\t' || *env == '\n' || *env == '\r') { env++; }
++	if (*env == '0') { return false; }
++	if (*env == '1') { return true; }
++	return defaultValue;
++}
++
++[[maybe_unused]] static bool mvkDTRSurfaceLogEnabled() {
++	return false;
++}
++
++[[maybe_unused]] static bool mvkDTRSurfaceLogAllImagesEnabled() {
++	return false;
++}
++
++static bool mvkDTRSkipForceUnpresentedCompletionEnabled() {
++	return mvkDTRBoolEnvValue("MVK_DTR_SKIP_FORCE_UNPRESENTED_COMPLETION", true);
++}
++
++static bool mvkDTRDisableLayerActionsEnabled() {
++	return mvkDTRBoolEnvValue("MVK_DTR_DISABLE_LAYER_ACTIONS", true);
++}
++
++static void mvkDTRRunWithDisabledLayerActions(void (^block)(void)) {
++	if ( !mvkDTRDisableLayerActionsEnabled() ) {
++		block();
++		return;
++	}
++
++	[CATransaction begin];
++	[CATransaction setDisableActions: YES];
++	[CATransaction setAnimationDuration: 0.0];
++	block();
++	[CATransaction commit];
++}
++
++static bool mvkDTRShouldLogSwapchainImage(VkExtent2D extent) {
++	(void)extent;
++	return false;
++}
++
++[[maybe_unused]] static uint64_t mvkDTRCurrentThreadID() {
++	uint64_t tid = 0;
++	pthread_threadid_np(pthread_self(), &tid);
++	return tid;
++}
++
++[[maybe_unused]] static NSString* mvkDTRSurfaceLogPath() {
++	return nil;
++}
++
++template<typename... Args> static inline void mvkDTRDiscardLogArgs(Args&&...) {}
++#define mvkDTRSurfaceLog(...) do { if (false) { mvkDTRDiscardLogArgs(__VA_ARGS__); } } while (false)
++
++
+ #pragma mark -
+ #pragma mark MVKSwapchain
+ 
+@@ -55,21 +117,25 @@
+ 
+ 	// Get the number of surface images
+ 	uint32_t imgCnt = getImageCount();
++	uint32_t requestedCount = pCount ? *pCount : 0;
+ 
+ 	// If images aren't actually being requested yet, simply update the returned count
+ 	if ( !pSwapchainImages ) {
+ 		*pCount = imgCnt;
++		mvkDTRSurfaceLog("get images count swapchain=%p surface=%p requested=%u returned=%u layer=%p", this, _surface, requestedCount, imgCnt, getCAMetalLayer());
+ 		return VK_SUCCESS;
+ 	}
+ 
+ 	// Determine how many images we'll return, and return that number
+ 	VkResult result = (*pCount >= imgCnt) ? VK_SUCCESS : VK_INCOMPLETE;
+ 	*pCount = min(*pCount, imgCnt);
++	mvkDTRSurfaceLog("get images populate begin swapchain=%p surface=%p requested=%u returning=%u result=%d layer=%p", this, _surface, requestedCount, *pCount, result, getCAMetalLayer());
+ 
+ 	// Now populate the images
+ 	for (uint32_t imgIdx = 0; imgIdx < *pCount; imgIdx++) {
+ 		pSwapchainImages[imgIdx] = (VkImage)_presentableImages[imgIdx];
+ 	}
++	mvkDTRSurfaceLog("get images populate end swapchain=%p returned=%u first=%p", this, *pCount, *pCount ? _presentableImages[0] : nullptr);
+ 
+ 	return result;
+ }
+@@ -81,7 +147,15 @@
+ 										uint32_t* pImageIndex) {
+ 
+ 	if ( _device->getConfigurationResult() != VK_SUCCESS ) { return _device->getConfigurationResult(); }
++	if ( getConfigurationResult() != VK_SUCCESS ) {
++		mvkDTRSurfaceLog("acquire returning swapchain config result swapchain=%p result=%d", this, getConfigurationResult());
++		return getConfigurationResult();
++	}
+ 	if ( getIsSurfaceLost() ) { return VK_ERROR_SURFACE_LOST_KHR; }
++	bool shouldLogImage = mvkDTRShouldLogSwapchainImage(_imageExtent);
++	if (shouldLogImage) {
++		mvkDTRSurfaceLog("acquire next begin swapchain=%p surface=%p extent=%ux%u images=%u sem=%p fence=%p", this, _surface, _imageExtent.width, _imageExtent.height, getImageCount(), semaphore, fence);
++	}
+ 
+ 	// Find the image that has the shortest wait by finding the smallest availability measure.
+ 	MVKPresentableSwapchainImage* minWaitImage = nullptr;
+@@ -100,7 +174,11 @@
+ 	// and signal the semaphore and fence when it's available
+ 	*pImageIndex = minWaitImage->_swapchainIndex;
+ 	VkResult rslt = minWaitImage->acquireAndSignalWhenAvailable((MVKSemaphore*)semaphore, (MVKFence*)fence);
+-	return rslt ? rslt : getSurfaceStatus();
++	VkResult finalRslt = rslt ? rslt : getSurfaceStatus();
++	if (shouldLogImage) {
++		mvkDTRSurfaceLog("acquire next end swapchain=%p image=%p index=%u result=%d surface_status=%d", this, minWaitImage, *pImageIndex, rslt, finalRslt);
++	}
++	return finalRslt;
+ }
+ 
+ VkResult MVKSwapchain::releaseImages(const VkReleaseSwapchainImagesInfoKHR* pReleaseInfo) {
+@@ -121,6 +199,10 @@
+ 
+ VkResult MVKSwapchain::getSurfaceStatus() {
+ 	if (_device->getConfigurationResult() != VK_SUCCESS) { return _device->getConfigurationResult(); }
++	if (getConfigurationResult() != VK_SUCCESS) {
++		mvkDTRSurfaceLog("surface status returning swapchain config result swapchain=%p result=%d", this, getConfigurationResult());
++		return getConfigurationResult();
++	}
+ 	if (getIsSurfaceLost()) { return VK_ERROR_SURFACE_LOST_KHR; }
+ 	if ( !hasOptimalSurface() ) { return VK_SUBOPTIMAL_KHR; }
+ 	return VK_SUCCESS;
+@@ -253,15 +335,19 @@
+ }
+ 
+ void MVKSwapchain::beginPresentation(const MVKImagePresentInfo& presentInfo) {
++	mvkDTRSurfaceLog("swapchain begin presentation swapchain=%p image=%p extent=%ux%u unpresented_before=%u present_id=%llu", this, presentInfo.presentableImage, _imageExtent.width, _imageExtent.height, _unpresentedImageCount.load(), (unsigned long long)presentInfo.presentId);
+ 	_unpresentedImageCount++;
+ }
+ 
+ void MVKSwapchain::endPresentation(const MVKImagePresentInfo& presentInfo, uint64_t beginPresentTime, uint64_t actualPresentTime) {
++	mvkDTRSurfaceLog("swapchain end presentation begin swapchain=%p image=%p extent=%ux%u unpresented_before=%u present_id=%llu", this, presentInfo.presentableImage, _imageExtent.width, _imageExtent.height, _unpresentedImageCount.load(), (unsigned long long)presentInfo.presentId);
+ 	_unpresentedImageCount--;
+ 
+ 	std::lock_guard<std::mutex> lock(_presentHistoryLock);
++	mvkDTRSurfaceLog("swapchain end presentation history locked swapchain=%p unpresented_after=%u history_count=%u history_index=%u", this, _unpresentedImageCount.load(), _presentHistoryCount, _presentHistoryIndex);
+ 
+ 	markFrameInterval();
++	mvkDTRSurfaceLog("swapchain end presentation marked frame swapchain=%p", this);
+ 	if (_presentHistoryCount < kMaxPresentationHistory) {
+ 		_presentHistoryCount++;
+ 	} else {
+@@ -275,9 +361,11 @@
+ 	_presentTimingHistory[_presentHistoryIndex].earliestPresentTime = actualPresentTime;
+ 	_presentTimingHistory[_presentHistoryIndex].presentMargin = actualPresentTime > beginPresentTime ? actualPresentTime - beginPresentTime : 0;
+ 	_presentHistoryIndex = (_presentHistoryIndex + 1) % kMaxPresentationHistory;
++	mvkDTRSurfaceLog("swapchain end presentation end swapchain=%p history_count=%u history_index=%u", this, _presentHistoryCount, _presentHistoryIndex);
+ }
+ 
+ void MVKSwapchain::notifyPresentComplete(const MVKImagePresentInfo& presentInfo) {
++	mvkDTRSurfaceLog("swapchain notify present complete swapchain=%p image=%p present_id=%llu", this, presentInfo.presentableImage, (unsigned long long)presentInfo.presentId);
+ 	if (presentInfo.presentId != 0) {
+ 		std::unique_lock pidLock(_currentPresentIdMutex);
+ 		_currentPresentId = std::max(_currentPresentId, presentInfo.presentId);
+@@ -290,9 +378,22 @@
+ // drawableSize of the CAMetalLayer, which will trigger presentation completion and callbacks.
+ // The drawableSize will be set to a correct size by the next swapchain created on the same surface.
+ void MVKSwapchain::forceUnpresentedImageCompletion() {
+-	if (_unpresentedImageCount) {
+-		getCAMetalLayer().drawableSize = { 1,1 };
++	uint32_t unpresentedImageCount = _unpresentedImageCount.load();
++	if ( !unpresentedImageCount ) { return; }
++
++	auto* mtlLayer = getCAMetalLayer();
++	if ( !mtlLayer ) { return; }
++
++	if (mvkDTRSkipForceUnpresentedCompletionEnabled()) {
++		mvkDTRSurfaceLog("force unpresented image completion skipped swapchain=%p surface=%p layer=%p unpresented=%u", this, _surface, mtlLayer, unpresentedImageCount);
++		return;
+ 	}
++
++	mvkDTRSurfaceLog("force unpresented image completion swapchain=%p surface=%p layer=%p unpresented=%u", this, _surface, mtlLayer, unpresentedImageCount);
++	mvkDTRRunWithDisabledLayerActions(^{
++		CGSize forcedSize = { 1,1 };
++		mtlLayer.drawableSize = forcedSize;
++	});
+ }
+ 
+ void MVKSwapchain::setLayerNeedsDisplay(const VkPresentRegionKHR* pRegion) {
+@@ -393,12 +494,15 @@ static inline CIE1931XY VkXYColorEXTToCIE1931XY(VkXYColorEXT xy) {
+ 	: MVKVulkanAPIDeviceObject(device),
+ 	_surface((MVKSurface*)pCreateInfo->surface),
+ 	_imageExtent(pCreateInfo->imageExtent) {
++	mvkDTRSurfaceLog("create swapchain begin swapchain=%p surface=%p old=%p active=%p extent=%ux%u min_images=%u present_mode=%u", this, _surface, pCreateInfo->oldSwapchain, _surface->_activeSwapchain, pCreateInfo->imageExtent.width, pCreateInfo->imageExtent.height, pCreateInfo->minImageCount, pCreateInfo->presentMode);
++	_surface->logNativeState("create swapchain begin");
+ 
+ 	// Check if oldSwapchain is properly set
+ 	auto* oldSwapchain = (MVKSwapchain*)pCreateInfo->oldSwapchain;
+ 	if (oldSwapchain == _surface->_activeSwapchain) {
+ 		_surface->setActiveSwapchain(this);
+ 	} else {
++		mvkDTRSurfaceLog("create swapchain old mismatch swapchain=%p surface=%p old=%p active=%p", this, _surface, oldSwapchain, _surface->_activeSwapchain);
+ 		setConfigurationResult(reportError(VK_ERROR_NATIVE_WINDOW_IN_USE_KHR, "vkCreateSwapchainKHR(): pCreateInfo->oldSwapchain does not match the VkSwapchain that is in use by the surface"));
+ 		return;
+ 	}
+@@ -439,6 +543,7 @@ static inline CIE1931XY VkXYColorEXTToCIE1931XY(VkXYColorEXT xy) {
+ 							   mtlFeats.maxSwapchainImageCount);
+ 	initCAMetalLayer(pCreateInfo, pScalingInfo, imgCnt);
+     initSurfaceImages(pCreateInfo, imgCnt);		// After initCAMetalLayer()
++	mvkDTRSurfaceLog("create swapchain end swapchain=%p result=%d image_count=%zu layer=%p", this, getConfigurationResult(), _presentableImages.size(), getCAMetalLayer());
+ }
+ 
+ // kCAGravityResize is the Metal default
+@@ -488,6 +593,8 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
+ 
+ 	VkExtent2D prevSurfaceExtent = _surface->getExtent();
+ 	auto* oldSwapchain = (MVKSwapchain*)pCreateInfo->oldSwapchain;
++	mvkDTRSurfaceLog("init CAMetalLayer swapchain=%p layer=%p old=%p image_extent=%ux%u prev_surface=%ux%u natural=%ux%u", this, mtlLayer, oldSwapchain, _imageExtent.width, _imageExtent.height, prevSurfaceExtent.width, prevSurfaceExtent.height, _surface->getNaturalExtent().width, _surface->getNaturalExtent().height);
++	_surface->logNativeState("init CAMetalLayer begin");
+ 
+ 	// Because of a regression in Metal, the most recent one or two presentations may not
+ 	// complete and call back. Changing the CAMetalLayer drawableSize will force any incomplete
+@@ -499,77 +606,85 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
+ 	}
+ 
+ 	auto minMagFilter = getMVKConfig().swapchainMinMagFilterUseNearest ? kCAFilterNearest : kCAFilterLinear;
+-	mtlLayer.drawableSize = mvkCGSizeFromVkExtent2D(_imageExtent);
+-	mtlLayer.device = getMTLDevice();
+-	mtlLayer.pixelFormat = getPixelFormats()->getMTLPixelFormat(pCreateInfo->imageFormat);
+-	mtlLayer.maximumDrawableCount = imgCnt;
+-	mtlLayer.displaySyncEnabledMVK = (pCreateInfo->presentMode != VK_PRESENT_MODE_IMMEDIATE_KHR);
+-	mtlLayer.minificationFilter = minMagFilter;
+-	mtlLayer.magnificationFilter = minMagFilter;
+-	mtlLayer.contentsGravity = getCALayerContentsGravity(pScalingInfo);
+-	mtlLayer.framebufferOnly = !mvkIsAnyFlagEnabled(pCreateInfo->imageUsage, (VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+-																			  VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+-																			  VK_IMAGE_USAGE_SAMPLED_BIT |
+-																			  VK_IMAGE_USAGE_STORAGE_BIT)) &&
++	mvkDTRRunWithDisabledLayerActions(^{
++		mtlLayer.drawableSize = mvkCGSizeFromVkExtent2D(_imageExtent);
++		mtlLayer.device = getMTLDevice();
++		mtlLayer.pixelFormat = getPixelFormats()->getMTLPixelFormat(pCreateInfo->imageFormat);
++		mtlLayer.maximumDrawableCount = imgCnt;
++		mtlLayer.displaySyncEnabledMVK = (pCreateInfo->presentMode != VK_PRESENT_MODE_IMMEDIATE_KHR);
++		mtlLayer.minificationFilter = minMagFilter;
++		mtlLayer.magnificationFilter = minMagFilter;
++		mtlLayer.contentsGravity = getCALayerContentsGravity(pScalingInfo);
++		mtlLayer.framebufferOnly = !mvkIsAnyFlagEnabled(pCreateInfo->imageUsage, (VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
++												  VK_IMAGE_USAGE_TRANSFER_DST_BIT |
++												  VK_IMAGE_USAGE_SAMPLED_BIT |
++												  VK_IMAGE_USAGE_STORAGE_BIT)) &&
+ 								!mvkAreAllFlagsEnabled(pCreateInfo->flags, VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR);
+ 
+-	if (pCreateInfo->compositeAlpha != VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) {
+-		mtlLayer.opaque = pCreateInfo->compositeAlpha == VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+-	}
++		if (pCreateInfo->compositeAlpha != VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) {
++			mtlLayer.opaque = pCreateInfo->compositeAlpha == VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
++		}
+ 
+-	switch (pCreateInfo->imageColorSpace) {
+-		case VK_COLOR_SPACE_SRGB_NONLINEAR_KHR:
+-			mtlLayer.colorspaceNameMVK = kCGColorSpaceSRGB;
+-			mtlLayer.wantsExtendedDynamicRangeContentMVK = NO;
+-			break;
+-		case VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT:
+-			mtlLayer.colorspaceNameMVK = kCGColorSpaceDisplayP3;
+-			mtlLayer.wantsExtendedDynamicRangeContentMVK = YES;
+-			break;
+-		case VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT:
+-			mtlLayer.colorspaceNameMVK = kCGColorSpaceExtendedLinearSRGB;
+-			mtlLayer.wantsExtendedDynamicRangeContentMVK = YES;
+-			break;
+-		case VK_COLOR_SPACE_EXTENDED_SRGB_NONLINEAR_EXT:
+-			mtlLayer.colorspaceNameMVK = kCGColorSpaceExtendedSRGB;
+-			mtlLayer.wantsExtendedDynamicRangeContentMVK = YES;
+-			break;
+-		case VK_COLOR_SPACE_DISPLAY_P3_LINEAR_EXT:
+-			mtlLayer.colorspaceNameMVK = kCGColorSpaceExtendedLinearDisplayP3;
+-			mtlLayer.wantsExtendedDynamicRangeContentMVK = YES;
+-			break;
+-		case VK_COLOR_SPACE_DCI_P3_NONLINEAR_EXT:
+-			mtlLayer.colorspaceNameMVK = kCGColorSpaceDCIP3;
+-			mtlLayer.wantsExtendedDynamicRangeContentMVK = YES;
+-			break;
+-		case VK_COLOR_SPACE_BT709_NONLINEAR_EXT:
+-			mtlLayer.colorspaceNameMVK = kCGColorSpaceITUR_709;
+-			mtlLayer.wantsExtendedDynamicRangeContentMVK = NO;
+-			break;
+-		case VK_COLOR_SPACE_BT2020_LINEAR_EXT:
+-			mtlLayer.colorspaceNameMVK = kCGColorSpaceExtendedLinearITUR_2020;
+-			mtlLayer.wantsExtendedDynamicRangeContentMVK = YES;
+-			break;
+-		case VK_COLOR_SPACE_HDR10_ST2084_EXT:
+-			mtlLayer.colorspaceNameMVK = kCGColorSpaceITUR_2100_PQ;
+-			mtlLayer.wantsExtendedDynamicRangeContentMVK = YES;
+-			break;
+-		case VK_COLOR_SPACE_HDR10_HLG_EXT:
+-			mtlLayer.colorspaceNameMVK = kCGColorSpaceITUR_2100_HLG;
+-			mtlLayer.wantsExtendedDynamicRangeContentMVK = YES;
+-			break;
+-		case VK_COLOR_SPACE_ADOBERGB_NONLINEAR_EXT:
+-			mtlLayer.colorspaceNameMVK = kCGColorSpaceAdobeRGB1998;
+-			mtlLayer.wantsExtendedDynamicRangeContentMVK = NO;
+-			break;
+-		case VK_COLOR_SPACE_PASS_THROUGH_EXT:
+-			mtlLayer.colorspace = nil;
+-			mtlLayer.wantsExtendedDynamicRangeContentMVK = NO;
+-			break;
+-		default:
+-			setConfigurationResult(reportError(VK_ERROR_FORMAT_NOT_SUPPORTED, "vkCreateSwapchainKHR(): Metal does not support VkColorSpaceKHR value %d.", pCreateInfo->imageColorSpace));
+-			break;
+-	}
++		switch (pCreateInfo->imageColorSpace) {
++			case VK_COLOR_SPACE_SRGB_NONLINEAR_KHR:
++				mtlLayer.colorspaceNameMVK = kCGColorSpaceSRGB;
++				mtlLayer.wantsExtendedDynamicRangeContentMVK = NO;
++				break;
++			case VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT:
++				mtlLayer.colorspaceNameMVK = kCGColorSpaceDisplayP3;
++				mtlLayer.wantsExtendedDynamicRangeContentMVK = YES;
++				break;
++			case VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT:
++				mtlLayer.colorspaceNameMVK = kCGColorSpaceExtendedLinearSRGB;
++				mtlLayer.wantsExtendedDynamicRangeContentMVK = YES;
++				break;
++			case VK_COLOR_SPACE_EXTENDED_SRGB_NONLINEAR_EXT:
++				mtlLayer.colorspaceNameMVK = kCGColorSpaceExtendedSRGB;
++				mtlLayer.wantsExtendedDynamicRangeContentMVK = YES;
++				break;
++			case VK_COLOR_SPACE_DISPLAY_P3_LINEAR_EXT:
++				mtlLayer.colorspaceNameMVK = kCGColorSpaceExtendedLinearDisplayP3;
++				mtlLayer.wantsExtendedDynamicRangeContentMVK = YES;
++				break;
++			case VK_COLOR_SPACE_DCI_P3_NONLINEAR_EXT:
++				mtlLayer.colorspaceNameMVK = kCGColorSpaceDCIP3;
++				mtlLayer.wantsExtendedDynamicRangeContentMVK = YES;
++				break;
++			case VK_COLOR_SPACE_BT709_NONLINEAR_EXT:
++				mtlLayer.colorspaceNameMVK = kCGColorSpaceITUR_709;
++				mtlLayer.wantsExtendedDynamicRangeContentMVK = NO;
++				break;
++			case VK_COLOR_SPACE_BT2020_LINEAR_EXT:
++				mtlLayer.colorspaceNameMVK = kCGColorSpaceExtendedLinearITUR_2020;
++				mtlLayer.wantsExtendedDynamicRangeContentMVK = YES;
++				break;
++			case VK_COLOR_SPACE_HDR10_ST2084_EXT:
++				mtlLayer.colorspaceNameMVK = kCGColorSpaceITUR_2100_PQ;
++				mtlLayer.wantsExtendedDynamicRangeContentMVK = YES;
++				break;
++			case VK_COLOR_SPACE_HDR10_HLG_EXT:
++				mtlLayer.colorspaceNameMVK = kCGColorSpaceITUR_2100_HLG;
++				mtlLayer.wantsExtendedDynamicRangeContentMVK = YES;
++				break;
++			case VK_COLOR_SPACE_ADOBERGB_NONLINEAR_EXT:
++				mtlLayer.colorspaceNameMVK = kCGColorSpaceAdobeRGB1998;
++				mtlLayer.wantsExtendedDynamicRangeContentMVK = NO;
++				break;
++			case VK_COLOR_SPACE_PASS_THROUGH_EXT:
++				mtlLayer.colorspace = nil;
++				mtlLayer.wantsExtendedDynamicRangeContentMVK = NO;
++				break;
++			default:
++				setConfigurationResult(reportError(VK_ERROR_FORMAT_NOT_SUPPORTED, "vkCreateSwapchainKHR(): Metal does not support VkColorSpaceKHR value %d.", pCreateInfo->imageColorSpace));
++				break;
++		}
++	});
++	mvkDTRSurfaceLog("init CAMetalLayer end swapchain=%p layer=%p result=%d drawable=%zux%zu pixfmt=%llu max_drawables=%lu display_sync=%u framebuffer_only=%u opaque=%u disable_actions=%u",
++					 this, mtlLayer, getConfigurationResult(), (size_t)mtlLayer.drawableSize.width, (size_t)mtlLayer.drawableSize.height,
++					 (unsigned long long)mtlLayer.pixelFormat, (unsigned long)mtlLayer.maximumDrawableCount,
++					 mtlLayer.displaySyncEnabledMVK ? 1 : 0, mtlLayer.framebufferOnly ? 1 : 0, mtlLayer.opaque ? 1 : 0,
++					 mvkDTRDisableLayerActionsEnabled() ? 1 : 0);
++	_surface->logNativeState("init CAMetalLayer end");
+ 
+ 	// TODO: set additional CAMetalLayer properties before extracting drawables:
+ 	//	- presentsWithTransaction
+@@ -625,7 +740,10 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
+ 	// lazily, and hence is already deferred (or as deferred as we can make it).
+ 
+ 	for (uint32_t imgIdx = 0; imgIdx < imgCnt; imgIdx++) {
+-		_presentableImages.push_back(_device->createPresentableSwapchainImage(&imgInfo, this, imgIdx, nullptr));
++		mvkDTRSurfaceLog("create presentable image begin swapchain=%p index=%u extent=%ux%u format=%u usage=0x%x", this, imgIdx, imgExtent.width, imgExtent.height, imgInfo.format, imgInfo.usage);
++		auto* img = _device->createPresentableSwapchainImage(&imgInfo, this, imgIdx, nullptr);
++		_presentableImages.push_back(img);
++		mvkDTRSurfaceLog("create presentable image end swapchain=%p index=%u image=%p result=%d", this, imgIdx, img, img ? img->getConfigurationResult() : VK_ERROR_OUT_OF_HOST_MEMORY);
+ 	}
+ 
+ 	auto* mtlLayer = getCAMetalLayer();
+@@ -646,6 +764,8 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
+ }
+ 
+ void MVKSwapchain::destroy() {
++	mvkDTRSurfaceLog("destroy swapchain swapchain=%p surface=%p active=%p result=%d", this, _surface, _surface->_activeSwapchain, getConfigurationResult());
++	_surface->logNativeState("destroy swapchain");
+ 	// If this swapchain was not replaced by a new swapchain, remove this swapchain
+ 	// from the surface, and force any outstanding presentations to complete.
+ 	if (_surface->_activeSwapchain == this) {
+@@ -653,10 +773,11 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
+ 		forceUnpresentedImageCompletion();
+ 	}
+ 	for (auto& img : _presentableImages) { _device->destroyPresentableSwapchainImage(img, NULL); }
++	mvkDTRSurfaceLog("destroy swapchain images complete swapchain=%p surface=%p image_count=%zu", this, _surface, _presentableImages.size());
++	mvkDTRSurfaceLog("destroy swapchain base destroy begin swapchain=%p surface=%p", this, _surface);
+ 	MVKVulkanAPIDeviceObject::destroy();
+ }
+ 
+ MVKSwapchain::~MVKSwapchain() {
+     if (_licenseWatermark) { _licenseWatermark->destroy(); }
+ }
+-
+diff --git a/MoltenVK/MoltenVK/Vulkan/vulkan.mm b/MoltenVK/MoltenVK/Vulkan/vulkan.mm
+index b15fe5e8..f3f94885 100644
+--- a/MoltenVK/MoltenVK/Vulkan/vulkan.mm
++++ b/MoltenVK/MoltenVK/Vulkan/vulkan.mm
+@@ -42,18 +42,31 @@
+ #include "MVKFoundation.h"
+ #include "MVKOSExtensions.h"
+ 
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
+ #include <pthread.h>
+ 
+ 
++static bool mvkDTRSurfaceLogAllAPIEnabled() {
++	return false;
++}
++
++template<typename... Args> static inline void mvkDTRDiscardLogArgs(Args&&...) {}
++#define mvkDTRSurfaceLog(...) do { if (false) { mvkDTRDiscardLogArgs(__VA_ARGS__); } } while (false)
++
++
+ #pragma mark -
+ #pragma mark Vulkan call templates
+ 
+ // Optionally log start of function calls to stderr
+ static inline uint64_t MVKTraceVulkanCallStartImpl(const char* funcName) {
+ 
++	bool includeEntry = false;
+ 	bool includeThread = false;
+ 	bool includeExit = false;
+ 	bool includeDuration = false;
++	bool dtrLogAllAPI = mvkDTRSurfaceLogAllAPIEnabled();
+ 
+ 	switch (getGlobalMVKConfig().traceVulkanCalls) {
+ 		case MVK_CONFIG_TRACE_VULKAN_CALLS_DURATION:
+@@ -61,6 +74,7 @@ static inline uint64_t MVKTraceVulkanCallStartImpl(const char* funcName) {
+ 		case MVK_CONFIG_TRACE_VULKAN_CALLS_ENTER_EXIT:
+ 			includeExit = true;			// fallthrough
+ 		case MVK_CONFIG_TRACE_VULKAN_CALLS_ENTER:
++			includeEntry = true;
+ 			break;
+ 
+ 		case MVK_CONFIG_TRACE_VULKAN_CALLS_DURATION_THREAD_ID:
+@@ -68,15 +82,18 @@ static inline uint64_t MVKTraceVulkanCallStartImpl(const char* funcName) {
+ 		case MVK_CONFIG_TRACE_VULKAN_CALLS_ENTER_EXIT_THREAD_ID:
+ 			includeExit = true;			// fallthrough
+ 		case MVK_CONFIG_TRACE_VULKAN_CALLS_ENTER_THREAD_ID:
++			includeEntry = true;
+ 			includeThread = true;		// fallthrough
+ 			break;
+ 
+ 		case MVK_CONFIG_TRACE_VULKAN_CALLS_NONE:
+ 		default:
+-			return 0;
++			break;
+ 	}
+ 
+-	if (includeThread) {
++	if (dtrLogAllAPI) { mvkDTRSurfaceLog("api enter %s", funcName); }
++
++	if (includeEntry && includeThread) {
+ 		uint64_t gtid, mtid;
+ 		const uint32_t kThreadNameBuffSize = 256;
+ 		char threadName[kThreadNameBuffSize];
+@@ -85,15 +102,19 @@ static inline uint64_t MVKTraceVulkanCallStartImpl(const char* funcName) {
+ 		pthread_threadid_np(tid, &gtid);		// Global system-wide thead ID
+ 		pthread_getname_np(tid, threadName, kThreadNameBuffSize);
+ 		fprintf(stderr, "[mvk-trace] %s()%s [%llu/%llu/%s]\n", funcName, includeExit ? " {" : "", mtid, gtid, threadName);
+-	} else {
++	} else if (includeEntry) {
+ 		fprintf(stderr, "[mvk-trace] %s()%s\n", funcName, includeExit ? " {" : "");
+ 	}
+ 
+-	return includeDuration ? mvkGetTimestamp() : 0;
++	return (includeDuration || dtrLogAllAPI) ? mvkGetTimestamp() : 0;
+ }
+ 
+ // Optionally log end of function calls and timings to stderr
+ static inline void MVKTraceVulkanCallEndImpl(const char* funcName, uint64_t startTime) {
++	if (mvkDTRSurfaceLogAllAPIEnabled()) {
++		mvkDTRSurfaceLog("api exit %s duration_ms=%.4f", funcName, startTime ? mvkGetElapsedMilliseconds(startTime) : 0.0);
++	}
++
+ 	switch(getGlobalMVKConfig().traceVulkanCalls) {
+ 		case MVK_CONFIG_TRACE_VULKAN_CALLS_ENTER_EXIT:
+ 		case MVK_CONFIG_TRACE_VULKAN_CALLS_ENTER_EXIT_THREAD_ID:
+@@ -942,8 +963,10 @@ MVK_PUBLIC_VULKAN_SYMBOL void vkDestroyImage(
+ 	const VkAllocationCallbacks*                pAllocator) {
+ 
+ 	MVKTraceVulkanCallStart();
++	mvkDTRSurfaceLog("vkDestroyImage enter device=%p image=%p", device, image);
+ 	MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
+ 	mvkDev->destroyImage((MVKImage*)image, pAllocator);
++	mvkDTRSurfaceLog("vkDestroyImage exit device=%p image=%p", device, image);
+ 	MVKTraceVulkanCallEnd();
+ }
+ 
+@@ -3502,8 +3525,13 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkCreateSwapchainKHR(
+     VkDevice                                 device,
+     const VkSwapchainCreateInfoKHR*          pCreateInfo,
+     const VkAllocationCallbacks*             pAllocator,
+-    VkSwapchainKHR*                          pSwapchain) {
++	VkSwapchainKHR*                          pSwapchain) {
+ 
++	mvkDTRSurfaceLog("vkCreateSwapchainKHR enter device=%p surface=%p old=%p extent=%ux%u min_images=%u present_mode=%u format=%u usage=0x%x",
++					 device, pCreateInfo ? pCreateInfo->surface : VK_NULL_HANDLE, pCreateInfo ? pCreateInfo->oldSwapchain : VK_NULL_HANDLE,
++					 pCreateInfo ? pCreateInfo->imageExtent.width : 0, pCreateInfo ? pCreateInfo->imageExtent.height : 0,
++					 pCreateInfo ? pCreateInfo->minImageCount : 0, pCreateInfo ? pCreateInfo->presentMode : VK_PRESENT_MODE_MAX_ENUM_KHR,
++					 pCreateInfo ? pCreateInfo->imageFormat : VK_FORMAT_UNDEFINED, pCreateInfo ? pCreateInfo->imageUsage : 0);
+ 	MVKTraceVulkanCallStart();
+     MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
+     VkResult rslt = mvkDev->getConfigurationResult();
+@@ -3514,30 +3542,35 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkCreateSwapchainKHR(
+         if (rslt < 0) { *pSwapchain = VK_NULL_HANDLE; mvkDev->destroySwapchain(mvkSwpChn, pAllocator); }
+     }
+ 	MVKTraceVulkanCallEnd();
++	mvkDTRSurfaceLog("vkCreateSwapchainKHR exit result=%d swapchain=%p", rslt, pSwapchain ? *pSwapchain : VK_NULL_HANDLE);
+ 	return rslt;
+ }
+ 
+ MVK_PUBLIC_VULKAN_SYMBOL void vkDestroySwapchainKHR(
+     VkDevice                                 device,
+     VkSwapchainKHR                           swapchain,
+-    const VkAllocationCallbacks*             pAllocator) {
++	const VkAllocationCallbacks*             pAllocator) {
+ 
++	mvkDTRSurfaceLog("vkDestroySwapchainKHR enter device=%p swapchain=%p", device, swapchain);
+ 	MVKTraceVulkanCallStart();
+     MVKDevice* mvkDev = MVKDevice::getMVKDevice(device);
+     mvkDev->destroySwapchain((MVKSwapchain*)swapchain, pAllocator);
+ 	MVKTraceVulkanCallEnd();
++	mvkDTRSurfaceLog("vkDestroySwapchainKHR exit device=%p swapchain=%p", device, swapchain);
+ }
+ 
+ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetSwapchainImagesKHR(
+     VkDevice                                 device,
+     VkSwapchainKHR                           swapchain,
+     uint32_t*                                pCount,
+-    VkImage*                                 pSwapchainImages) {
++	VkImage*                                 pSwapchainImages) {
+ 
++	mvkDTRSurfaceLog("vkGetSwapchainImagesKHR enter device=%p swapchain=%p requested=%u populate=%u", device, swapchain, pCount ? *pCount : 0, pSwapchainImages ? 1 : 0);
+ 	MVKTraceVulkanCallStart();
+     MVKSwapchain* mvkSwapchain = (MVKSwapchain*)swapchain;
+     VkResult rslt = mvkSwapchain->getImages(pCount, pSwapchainImages);
+ 	MVKTraceVulkanCallEnd();
++	mvkDTRSurfaceLog("vkGetSwapchainImagesKHR exit result=%d returned=%u first=%p", rslt, pCount ? *pCount : 0, (pSwapchainImages && pCount && *pCount) ? pSwapchainImages[0] : VK_NULL_HANDLE);
+ 	return rslt;
+ }
+ 
+@@ -3547,23 +3580,43 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkAcquireNextImageKHR(
+     uint64_t                                     timeout,
+     VkSemaphore                                  semaphore,
+     VkFence                                      fence,
+-    uint32_t*                                    pImageIndex) {
++	uint32_t*                                    pImageIndex) {
+ 
++	mvkDTRSurfaceLog("vkAcquireNextImageKHR enter device=%p swapchain=%p timeout=%llu sem=%p fence=%p", device, swapchain, (unsigned long long)timeout, semaphore, fence);
+ 	MVKTraceVulkanCallStart();
+     MVKSwapchain* mvkSwapchain = (MVKSwapchain*)swapchain;
+     VkResult rslt = mvkSwapchain->acquireNextImage(timeout, semaphore, fence, ~0u, pImageIndex);
+ 	MVKTraceVulkanCallEnd();
++	mvkDTRSurfaceLog("vkAcquireNextImageKHR exit result=%d index=%u", rslt, pImageIndex ? *pImageIndex : 0);
+ 	return rslt;
+ }
+ 
+ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkQueuePresentKHR(
+     VkQueue                                      queue,
+-    const VkPresentInfoKHR*                      pPresentInfo) {
+-
++	const VkPresentInfoKHR*                      pPresentInfo) {
++
++	mvkDTRSurfaceLog("vkQueuePresentKHR enter queue=%p swapchains=%u waits=%u pResults=%p first_swapchain=%p first_index=%u",
++					 queue, pPresentInfo ? pPresentInfo->swapchainCount : 0, pPresentInfo ? pPresentInfo->waitSemaphoreCount : 0,
++					 pPresentInfo ? pPresentInfo->pResults : nullptr,
++					 (pPresentInfo && pPresentInfo->swapchainCount) ? pPresentInfo->pSwapchains[0] : VK_NULL_HANDLE,
++					 (pPresentInfo && pPresentInfo->swapchainCount) ? pPresentInfo->pImageIndices[0] : 0);
++	if (pPresentInfo && pPresentInfo->pResults) {
++		for (uint32_t scIdx = 0; scIdx < pPresentInfo->swapchainCount; scIdx++) {
++			mvkDTRSurfaceLog("vkQueuePresentKHR pResults before queue=%p ordinal=%u swapchain=%p slot=%p",
++							 queue, scIdx, pPresentInfo->pSwapchains[scIdx], &pPresentInfo->pResults[scIdx]);
++		}
++	}
+ 	MVKTraceVulkanCallStart();
+     MVKQueue* mvkQ = MVKQueue::getMVKQueue(queue);
+     VkResult rslt = mvkQ->submit(pPresentInfo);
+ 	MVKTraceVulkanCallEnd();
++	mvkDTRSurfaceLog("vkQueuePresentKHR exit queue=%p result=%d pResults=%p", queue, rslt, pPresentInfo ? pPresentInfo->pResults : nullptr);
++	if (pPresentInfo && pPresentInfo->pResults) {
++		for (uint32_t scIdx = 0; scIdx < pPresentInfo->swapchainCount; scIdx++) {
++			mvkDTRSurfaceLog("vkQueuePresentKHR pResults after queue=%p ordinal=%u swapchain=%p slot=%p value=%d top_result=%d",
++							 queue, scIdx, pPresentInfo->pSwapchains[scIdx], &pPresentInfo->pResults[scIdx], pPresentInfo->pResults[scIdx], rslt);
++		}
++	}
+ 	return rslt;
+ }
+ 
+@@ -3610,14 +3663,16 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkAcquireNextImage2KHR(
+ 	const VkAcquireNextImageInfoKHR*            pAcquireInfo,
+ 	uint32_t*                                   pImageIndex) {
+ 
++	mvkDTRSurfaceLog("vkAcquireNextImage2KHR enter device=%p swapchain=%p timeout=%llu sem=%p fence=%p mask=0x%x", device, pAcquireInfo ? pAcquireInfo->swapchain : VK_NULL_HANDLE, pAcquireInfo ? (unsigned long long)pAcquireInfo->timeout : 0ULL, pAcquireInfo ? pAcquireInfo->semaphore : VK_NULL_HANDLE, pAcquireInfo ? pAcquireInfo->fence : VK_NULL_HANDLE, pAcquireInfo ? pAcquireInfo->deviceMask : 0);
+ 	MVKTraceVulkanCallStart();
+ 	MVKSwapchain* mvkSwapchain = (MVKSwapchain*)pAcquireInfo->swapchain;
+ 	VkResult rslt = mvkSwapchain->acquireNextImage(pAcquireInfo->timeout,
+ 												   pAcquireInfo->semaphore,
+ 												   pAcquireInfo->fence,
+ 												   pAcquireInfo->deviceMask,
+-												   pImageIndex);
++										   pImageIndex);
+ 	MVKTraceVulkanCallEnd();
++	mvkDTRSurfaceLog("vkAcquireNextImage2KHR exit result=%d index=%u", rslt, pImageIndex ? *pImageIndex : 0);
+ 	return rslt;
+ }
+ 
+@@ -3649,12 +3704,14 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkReleaseSwapchainImagesKHR(
+ MVK_PUBLIC_VULKAN_SYMBOL void vkDestroySurfaceKHR(
+     VkInstance                                   instance,
+     VkSurfaceKHR                                 surface,
+-    const VkAllocationCallbacks*                 pAllocator) {
++	const VkAllocationCallbacks*                 pAllocator) {
+ 
++	mvkDTRSurfaceLog("vkDestroySurfaceKHR enter instance=%p surface=%p", instance, surface);
+ 	MVKTraceVulkanCallStart();
+     MVKInstance* mvkInst = MVKInstance::getMVKInstance(instance);
+     mvkInst->destroySurface((MVKSurface*)surface, pAllocator);
+ 	MVKTraceVulkanCallEnd();
++	mvkDTRSurfaceLog("vkDestroySurfaceKHR exit instance=%p surface=%p", instance, surface);
+ }
+ 
+ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetPhysicalDeviceSurfaceSupportKHR(
+@@ -3674,12 +3731,17 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetPhysicalDeviceSurfaceSupportKHR(
+ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+     VkPhysicalDevice                            physicalDevice,
+     VkSurfaceKHR                                surface,
+-    VkSurfaceCapabilitiesKHR*                   pSurfaceCapabilities) {
++	VkSurfaceCapabilitiesKHR*                   pSurfaceCapabilities) {
+ 
++	mvkDTRSurfaceLog("vkGetPhysicalDeviceSurfaceCapabilitiesKHR enter physicalDevice=%p surface=%p", physicalDevice, surface);
+ 	MVKTraceVulkanCallStart();
+     MVKPhysicalDevice* mvkPD = MVKPhysicalDevice::getMVKPhysicalDevice(physicalDevice);
+     VkResult rslt = mvkPD->getSurfaceCapabilities(surface, pSurfaceCapabilities);
+ 	MVKTraceVulkanCallEnd();
++	mvkDTRSurfaceLog("vkGetPhysicalDeviceSurfaceCapabilitiesKHR exit result=%d current=%ux%u min=%ux%u max=%ux%u", rslt,
++					 pSurfaceCapabilities ? pSurfaceCapabilities->currentExtent.width : 0, pSurfaceCapabilities ? pSurfaceCapabilities->currentExtent.height : 0,
++					 pSurfaceCapabilities ? pSurfaceCapabilities->minImageExtent.width : 0, pSurfaceCapabilities ? pSurfaceCapabilities->minImageExtent.height : 0,
++					 pSurfaceCapabilities ? pSurfaceCapabilities->maxImageExtent.width : 0, pSurfaceCapabilities ? pSurfaceCapabilities->maxImageExtent.height : 0);
+ 	return rslt;
+ }
+ 
+@@ -3687,13 +3749,15 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetPhysicalDeviceSurfaceFormatsKHR(
+     VkPhysicalDevice                            physicalDevice,
+     VkSurfaceKHR                                surface,
+     uint32_t*                                   pSurfaceFormatCount,
+-    VkSurfaceFormatKHR*                         pSurfaceFormats) {
++	VkSurfaceFormatKHR*                         pSurfaceFormats) {
+ 
++	mvkDTRSurfaceLog("vkGetPhysicalDeviceSurfaceFormatsKHR enter physicalDevice=%p surface=%p requested=%u populate=%u", physicalDevice, surface, pSurfaceFormatCount ? *pSurfaceFormatCount : 0, pSurfaceFormats ? 1 : 0);
+ 	MVKTraceVulkanCallStart();
+     MVKPhysicalDevice* mvkPD = MVKPhysicalDevice::getMVKPhysicalDevice(physicalDevice);
+     MVKSurface* mvkSrfc = (MVKSurface*)surface;
+     VkResult rslt = mvkPD->getSurfaceFormats(mvkSrfc, pSurfaceFormatCount, pSurfaceFormats);
+ 	MVKTraceVulkanCallEnd();
++	mvkDTRSurfaceLog("vkGetPhysicalDeviceSurfaceFormatsKHR exit result=%d returned=%u", rslt, pSurfaceFormatCount ? *pSurfaceFormatCount : 0);
+ 	return rslt;
+ }
+ 
+@@ -3701,13 +3765,15 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetPhysicalDeviceSurfacePresentModesKHR(
+     VkPhysicalDevice                            physicalDevice,
+     VkSurfaceKHR                                surface,
+     uint32_t*                                   pPresentModeCount,
+-    VkPresentModeKHR*                           pPresentModes) {
++	VkPresentModeKHR*                           pPresentModes) {
+ 
++	mvkDTRSurfaceLog("vkGetPhysicalDeviceSurfacePresentModesKHR enter physicalDevice=%p surface=%p requested=%u populate=%u", physicalDevice, surface, pPresentModeCount ? *pPresentModeCount : 0, pPresentModes ? 1 : 0);
+ 	MVKTraceVulkanCallStart();
+     MVKPhysicalDevice* mvkPD = MVKPhysicalDevice::getMVKPhysicalDevice(physicalDevice);
+     MVKSurface* mvkSrfc = (MVKSurface*)surface;
+     VkResult rslt = mvkPD->getSurfacePresentModes(mvkSrfc, pPresentModeCount, pPresentModes);
+ 	MVKTraceVulkanCallEnd();
++	mvkDTRSurfaceLog("vkGetPhysicalDeviceSurfacePresentModesKHR exit result=%d returned=%u", rslt, pPresentModeCount ? *pPresentModeCount : 0);
+ 	return rslt;
+ }
+ 
+@@ -3720,10 +3786,14 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetPhysicalDeviceSurfaceCapabilities2KHR(
+ 	const VkPhysicalDeviceSurfaceInfo2KHR*      pSurfaceInfo,
+ 	VkSurfaceCapabilities2KHR*                  pSurfaceCapabilities) {
+ 
++	mvkDTRSurfaceLog("vkGetPhysicalDeviceSurfaceCapabilities2KHR enter physicalDevice=%p surface=%p", physicalDevice, pSurfaceInfo ? pSurfaceInfo->surface : VK_NULL_HANDLE);
+ 	MVKTraceVulkanCallStart();
+ 	MVKPhysicalDevice* mvkPD = MVKPhysicalDevice::getMVKPhysicalDevice(physicalDevice);
+ 	VkResult rslt = mvkPD->getSurfaceCapabilities(pSurfaceInfo, pSurfaceCapabilities);
+ 	MVKTraceVulkanCallEnd();
++	mvkDTRSurfaceLog("vkGetPhysicalDeviceSurfaceCapabilities2KHR exit result=%d current=%ux%u", rslt,
++					 pSurfaceCapabilities ? pSurfaceCapabilities->surfaceCapabilities.currentExtent.width : 0,
++					 pSurfaceCapabilities ? pSurfaceCapabilities->surfaceCapabilities.currentExtent.height : 0);
+ 	return rslt;
+ }
+ 
+@@ -3733,11 +3803,13 @@ MVK_PUBLIC_VULKAN_SYMBOL VkResult vkGetPhysicalDeviceSurfaceFormats2KHR(
+ 	uint32_t*                                   pSurfaceFormatCount,
+ 	VkSurfaceFormat2KHR*                        pSurfaceFormats) {
+ 
++	mvkDTRSurfaceLog("vkGetPhysicalDeviceSurfaceFormats2KHR enter physicalDevice=%p surface=%p requested=%u populate=%u", physicalDevice, pSurfaceInfo ? pSurfaceInfo->surface : VK_NULL_HANDLE, pSurfaceFormatCount ? *pSurfaceFormatCount : 0, pSurfaceFormats ? 1 : 0);
+ 	MVKTraceVulkanCallStart();
+ 	MVKPhysicalDevice* mvkPD = MVKPhysicalDevice::getMVKPhysicalDevice(physicalDevice);
+ 	MVKSurface* mvkSrfc = (MVKSurface*)pSurfaceInfo->surface;
+ 	VkResult rslt = mvkPD->getSurfaceFormats(mvkSrfc, pSurfaceFormatCount, pSurfaceFormats);
+ 	MVKTraceVulkanCallEnd();
++	mvkDTRSurfaceLog("vkGetPhysicalDeviceSurfaceFormats2KHR exit result=%d returned=%u", rslt, pSurfaceFormatCount ? *pSurfaceFormatCount : 0);
+ 	return rslt;
+ }
+ 
+@@ -4485,4 +4557,3 @@ MVK_PUBLIC_SYMBOL PFN_vkVoidFunction vk_icdGetPhysicalDeviceProcAddr(
+ 	MVKTraceVulkanCallEnd();
+ 	return func;
+ }
+-
+diff --git a/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp b/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp
+index 1eea1775..ae305877 100644
+--- a/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp
++++ b/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp
+@@ -386,6 +386,26 @@ MVK_PUBLIC_SYMBOL bool SPIRVToMSLConverter::convert(SPIRVToMSLConversionConfigur
+ 			ctxSI.outIsUsedByShader = pMSLCompiler->is_msl_shader_input_used(ctxSI.shaderVar.location);
+ 		}
+ 	}
++	if (shaderConfig.options.entryPointStage == spv::ExecutionModelVertex) {
++		for (uint32_t i = 0; i < 31; i++) {
++			if (pMSLCompiler->is_msl_shader_input_used(i)) {
++				bool found = false;
++				for (auto& ctxSI : shaderConfig.shaderInputs) {
++					if (ctxSI.shaderVar.location == i) {
++						found = true;
++						break;
++					}
++				}
++				if (!found) {
++					MSLShaderInput si;
++					si.shaderVar.location = i;
++					si.binding = 0;
++					si.outIsUsedByShader = true;
++					shaderConfig.shaderInputs.push_back(si);
++				}
++			}
++		}
++	}
+ 	for (auto& ctxSO : shaderConfig.shaderOutputs) {
+ 		if (ctxSO.shaderVar.builtin != spv::BuiltInMax) {
+ 			ctxSO.outIsUsedByShader = pMSLCompiler->has_active_builtin(ctxSO.shaderVar.builtin, spv::StorageClassOutput);
+diff --git a/README.md b/README.md
+index c6cbcfc2..76f5673a 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,122 @@
++# Detroit: Become Human CrossOver Preview Fix
++
++Unofficial MoltenVK fix for **Detroit: Become Human** on **CrossOver Preview**.
++
++Download release v0.0.3: https://github.com/DiAvisoo/MoltenVK-Detroit/releases/tag/Release003
++
++This build fixes the fullscreen/windowed crash, fixes the bug where you couldn't change video settings and it also enables the custom Metal shader cache by default. Once the ShaderCache is built the first time, you can quit the game and run the script compile_msl_library_cache.sh (see instructions below) to precompile the Metal Cache.
++The first setup pass still needs a fresh Detroit `ShaderCache`, but after the Metal cache is built (using the script) you should not need to delete Detroit's `ShaderCache` folder again.
++
++Without this patched MoltenVK, the game doesn't start. Also, if you haven't run the script (after having started the game once and let the Compiling Shaders progress finish) it can take around 20 minutes on each start depending on hardware. After the Metallib-cache is built however (using the script once), startup should take less than 20 seconds.
++
++Video demo here https://youtu.be/nvS6Yhe2FEE and here https://www.youtube.com/watch?v=WpMW1ZbnP6U
++
++It builds on the work in [alexdremov/MoltenVK](https://github.com/alexdremov/MoltenVK), [alexdremov/SPIRV-Cross](https://github.com/alexdremov/SPIRV-Cross), and the great research in [KhronosGroup/MoltenVK#2054](https://github.com/KhronosGroup/MoltenVK/issues/2054).
++
++ Tested on:
++     - Mac Studio M2 Max
++     - 64 GB RAM
++     - macOS Tahoe 26.3.1
++     - Metal 4
++     - CrossOver Preview 20260511 (27.0.0.40479) and on CrossOver 25.1.1 (25.1.1.38624)
++     - Xcode 26.5 build 17F42 for building
++
++Runs smooth as silk on the above specs!
++
++## Detroit Install
++
++1. Quit CrossOver Preview completely.
++
++2. Back up CrossOver Preview's original MoltenVK:
++
++```sh
++cp "/Applications/CrossOver Preview.app/Contents/SharedSupport/CrossOver/lib64/libMoltenVK.dylib" "$HOME/Desktop/libMoltenVK.dylib.backup"
++```
++
++3. Install this patched MoltenVK:
++
++```sh
++sudo install -m 755 libMoltenVK.dylib "/Applications/CrossOver Preview.app/Contents/SharedSupport/CrossOver/lib64/libMoltenVK.dylib"
++```
++
++4. Edit the Detroit/Steam bottle's `cxbottle.conf` and add under `[EnvironmentVariables]`:
++
++```ini
++"MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM" = "3"
++"MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION" = "1"
++```
++
++5. Edit Detroit's `GraphicOptions.JSON` and set:
++
++```json
++"DEPTH_OF_FIELD": 0
++```
++
++6. Apply the background blur hex fix to `DetroitBecomeHuman.exe` which causes issues with MoltenVK. (More info here https://www.reddit.com/r/DetroitBecomeHuman/comments/1mnfeva/for_all_pc_players_guide_to_remove_the_background/)
++
++Back up the executable first:
++
++```sh
++cp "DetroitBecomeHuman.exe" "DetroitBecomeHuman.exe.backup-before-blur-patch"
++```
++
++If you want to use Hex Fiend, install it with Homebrew:
++
++```sh
++brew install --cask hex-fiend
++```
++
++Open the executable in Hex Fiend or another hex editor. Search as hex for:
++
++```text
++41 C7 83 40 01 00 00 31 00 00
++```
++
++Replace with:
++
++```text
++7F C7 83 40 01 00 00 31 00 00
++```
++
++Only the first byte changes from `41` to `7F`.
++
++## Shader Cache
++
++For first setup only, delete Detroit's `ShaderCache` folder if you already have one. This forces the game to regenerate shaders with the patched MoltenVK.
++
++Start Detroit once. The game will go through `Compiling Shaders`; this can take around 20 minutes depending on hardware.
++
++After that finishes, quit the game and run:
++
++```sh
++Scripts/compile_msl_library_cache.sh
++```
++
++Note that you can specify how many cores you want to use to the script when generating the .metallib-files. Like so:
++```sh
++./compile_msl_library_cache.sh -j 10
++```
++
++That would use 10 cores and speed up the process.
++
++This precompiles the Metal source files MoltenVK saved into `.metallib` files. It also takes some time, but after it finishes Detroit should launch in under 20 seconds on future starts. Do not delete Detroit's `ShaderCache` folder for normal future launches after this script has completed.
++
++When launching with the finished cache, there may be no visible game window for about 20 seconds. Be patient; the window should appear once the cached Metal libraries are loaded.
++
++The cached Metal files folder can use around 3 GB of disk space.
++
++Default cache folder:
++
++```text
++~/Library/Caches/MoltenVK/detroit-msl-library-cache-full
++```
++
++## Optional Env Vars
++
++- `VK_DTR_MSL_LIBRARY_DISK_CACHE_DIR=/path/to/cache`: use a different Metal cache folder.
++
++-----
++
+ <a class="site-logo" href="https://github.com/KhronosGroup/MoltenVK" title="MoltenVK">
+ 	<img src="Docs/images/MoltenVK-Logo-Banner.png" alt="MoltenVK" style="width:256px;height:auto">
+ </a>
+diff --git a/Scripts/compile_msl_library_cache.sh b/Scripts/compile_msl_library_cache.sh
+new file mode 100755
+index 00000000..175d408b
+--- /dev/null
++++ b/Scripts/compile_msl_library_cache.sh
+@@ -0,0 +1,477 @@
++#!/bin/bash
++
++set -euo pipefail
++
++usage() {
++	cat <<'USAGE'
++Usage: compile_msl_library_cache.sh [options] [cache-dir]
++       VK_DTR_MSL_LIBRARY_DISK_CACHE_DIR=<cache-dir> compile_msl_library_cache.sh [options]
++
++Compiles MoltenVK persistent MSL disk-cache source dumps from msl-v1-*.metal
++to matching .metallib files that VK_DTR_MSL_LIBRARY_DISK_CACHE_DIR can load.
++If no directory is provided, the default is ~/Library/Caches/MoltenVK/detroit-msl-library-cache-full.
++
++Options:
++  -f, --force                         Rebuild existing .metallib files.
++  -j, --jobs <count>                  Compile up to <count> sources concurrently. Default: 1.
++      --slow-log <path>               Only compile hashes found in slow Metal compile log lines.
++      --min-compile-ms <ms>           With --slow-log, include entries at least this slow. Default: 0.
++      --filter-out <path>             Write selected hashes for MVK_DTR_MSL_LIBRARY_DISK_CACHE_FILTER_PATH.
++      --merge-filter-out <path>       Merge selected hashes into an existing filter file.
++      --prune-unselected-metallibs    Delete .metallib files not selected by --slow-log.
++      --prune-unselected-sources      Delete .metal/.meta files not selected by --slow-log.
++      --prune-unselected              Delete unselected .metallib/.metal/.meta files.
++  -h, --help                          Show this help.
++USAGE
++}
++
++die() {
++	printf 'error: %s\n' "$1" >&2
++	exit 1
++}
++
++force=0
++jobs="${JOBS:-1}"
++cache_dir_arg=""
++slow_log_arg=""
++min_compile_ms="0"
++filter_out_arg=""
++merge_filter_out=0
++prune_unselected_metallibs=0
++prune_unselected_sources=0
++
++while [ "$#" -gt 0 ]; do
++	case "$1" in
++		-f|--force)
++			force=1
++			shift
++			;;
++		-j|--jobs)
++			[ "$#" -ge 2 ] || die "$1 requires a value"
++			jobs="$2"
++			shift 2
++			;;
++		--jobs=*)
++			jobs="${1#--jobs=}"
++			shift
++			;;
++		--slow-log)
++			[ "$#" -ge 2 ] || die "$1 requires a value"
++			slow_log_arg="$2"
++			shift 2
++			;;
++		--slow-log=*)
++			slow_log_arg="${1#--slow-log=}"
++			shift
++			;;
++		--min-compile-ms)
++			[ "$#" -ge 2 ] || die "$1 requires a value"
++			min_compile_ms="$2"
++			shift 2
++			;;
++		--min-compile-ms=*)
++			min_compile_ms="${1#--min-compile-ms=}"
++			shift
++			;;
++		--filter-out)
++			[ "$#" -ge 2 ] || die "$1 requires a value"
++			filter_out_arg="$2"
++			shift 2
++			;;
++		--filter-out=*)
++			filter_out_arg="${1#--filter-out=}"
++			shift
++			;;
++		--merge-filter-out)
++			[ "$#" -ge 2 ] || die "$1 requires a value"
++			filter_out_arg="$2"
++			merge_filter_out=1
++			shift 2
++			;;
++		--merge-filter-out=*)
++			filter_out_arg="${1#--merge-filter-out=}"
++			merge_filter_out=1
++			shift
++			;;
++		--prune-unselected-metallibs)
++			prune_unselected_metallibs=1
++			shift
++			;;
++		--prune-unselected-sources)
++			prune_unselected_sources=1
++			shift
++			;;
++		--prune-unselected)
++			prune_unselected_metallibs=1
++			prune_unselected_sources=1
++			shift
++			;;
++		-h|--help)
++			usage
++			exit 0
++			;;
++		--)
++			shift
++			break
++			;;
++		-*)
++			die "unknown option: $1"
++			;;
++		*)
++			[ -z "$cache_dir_arg" ] || die "only one cache directory can be specified"
++			cache_dir_arg="$1"
++			shift
++			;;
++	esac
++done
++
++if [ "$#" -gt 0 ]; then
++	[ -z "$cache_dir_arg" ] || die "only one cache directory can be specified"
++	cache_dir_arg="$1"
++	shift
++fi
++
++[ "$#" -eq 0 ] || die "unexpected extra arguments"
++
++cache_dir="${cache_dir_arg:-${VK_DTR_MSL_LIBRARY_DISK_CACHE_DIR:-${MVK_DTR_MSL_LIBRARY_DISK_CACHE_DIR:-$HOME/Library/Caches/MoltenVK/detroit-msl-library-cache-full}}}"
++[ -d "$cache_dir" ] || die "cache directory does not exist: $cache_dir"
++
++case "$jobs" in
++	''|*[!0-9]*) die "jobs must be a positive integer" ;;
++esac
++[ "$jobs" -gt 0 ] || die "jobs must be a positive integer"
++
++perl -e 'exit($ARGV[0] =~ /^\d+(\.\d+)?$/ ? 0 : 1)' "$min_compile_ms" || die "min compile ms must be a non-negative number"
++
++if [ -n "$slow_log_arg" ]; then
++	[ -f "$slow_log_arg" ] || die "slow log does not exist: $slow_log_arg"
++elif [ "$prune_unselected_metallibs" = "1" ] || [ "$prune_unselected_sources" = "1" ]; then
++	die "prune options require --slow-log"
++fi
++
++if ! metal_tool="$(xcrun -sdk macosx -find metal 2>/dev/null)"; then
++	die "Metal Toolchain unavailable; run: xcodebuild -downloadComponent MetalToolchain"
++fi
++
++source_list="$(mktemp "${TMPDIR:-/tmp}/mvk-msl-sources.XXXXXX")"
++selected_hashes=""
++
++cleanup() {
++	rm -f "$source_list"
++	[ -z "$selected_hashes" ] || rm -f "$selected_hashes"
++}
++trap cleanup EXIT
++
++if [ -n "$slow_log_arg" ]; then
++	selected_hashes="$(mktemp "${TMPDIR:-/tmp}/mvk-msl-hashes.XXXXXX")"
++	perl -ne '
++		BEGIN { $min_ms = $ARGV[0]; shift @ARGV; }
++		if (/slow Metal library compile .*msl_hash=([0-9a-fA-F]+).*elapsed=([0-9.]+)ms/) {
++			$hashes{lc($1)} = 1 if $2 >= $min_ms;
++		}
++		END { print "$_\n" for sort keys %hashes; }
++	' "$min_compile_ms" "$slow_log_arg" > "$selected_hashes"
++
++	[ -s "$selected_hashes" ] || die "no slow compile hashes matched: $slow_log_arg"
++	find "$cache_dir" -type f -name 'msl-v1-*.metal' -print0 |
++		SELECTED_HASHES_PATH="$selected_hashes" perl -0ne '
++			BEGIN {
++				open(my $fh, "<", $ENV{"SELECTED_HASHES_PATH"}) or die "open selected hashes failed: $!\n";
++				local $/ = "\n";
++				while (my $line = <$fh>) { chomp($line); $hashes{lc($line)} = 1 if $line =~ /[0-9a-fA-F]/; }
++			}
++			print if /-h([0-9a-fA-F]+)-s/ && $hashes{lc($1)};
++		' > "$source_list"
++else
++	find "$cache_dir" -type f -name 'msl-v1-*.metal' -print0 > "$source_list"
++fi
++
++source_count="$(perl -0ne '$count++; END { print $count + 0 }' "$source_list")"
++if [ "$source_count" -eq 0 ]; then
++	if [ -n "$slow_log_arg" ]; then
++		printf 'No matching msl-v1-*.metal files found in %s\n' "$cache_dir"
++	else
++		printf 'No msl-v1-*.metal files found in %s\n' "$cache_dir"
++	fi
++	exit 0
++fi
++
++if [ -n "$slow_log_arg" ]; then
++	hash_count="$(perl -ne '$count++; END { print $count + 0 }' "$selected_hashes")"
++	printf 'Selected %s source(s) from %s slow hash(es).\n' "$source_count" "$hash_count"
++fi
++
++if [ -n "$filter_out_arg" ]; then
++	filter_dir="${filter_out_arg%/*}"
++	if [ "$filter_dir" != "$filter_out_arg" ]; then
++		mkdir -p "$filter_dir"
++	fi
++	filter_tmp="${filter_out_arg}.tmp.$$"
++	rm -f "$filter_tmp"
++	if [ -n "$selected_hashes" ]; then
++		if [ "$merge_filter_out" = "1" ] && [ -f "$filter_out_arg" ]; then
++			cat "$filter_out_arg" "$selected_hashes" | perl -ne '
++				chomp;
++				$hashes{lc($_)} = 1 if /[0-9a-fA-F]/;
++				END { print "$_\n" for sort keys %hashes; }
++			' > "$filter_tmp"
++		else
++			cp "$selected_hashes" "$filter_tmp"
++		fi
++	else
++		perl -0ne '
++			$hashes{lc($1)} = 1 if /-h([0-9a-fA-F]+)-s/;
++			END { print "$_\n" for sort keys %hashes; }
++		' "$source_list" > "$filter_tmp"
++	fi
++	mv "$filter_tmp" "$filter_out_arg"
++	printf 'Wrote filter %s\n' "$filter_out_arg"
++fi
++
++prune_unselected() {
++	local label="$1"
++	shift
++	local removed
++	removed="$(
++		find "$@" -print0 |
++			SELECTED_HASHES_PATH="$selected_hashes" perl -0ne '
++				BEGIN {
++					open(my $fh, "<", $ENV{"SELECTED_HASHES_PATH"}) or die "open selected hashes failed: $!\n";
++					local $/ = "\n";
++					while (my $line = <$fh>) { chomp($line); $hashes{lc($line)} = 1 if $line =~ /[0-9a-fA-F]/; }
++				}
++				if (/-h([0-9a-fA-F]+)-s/ && !$hashes{lc($1)}) {
++					unlink $_ or warn "remove $_ failed: $!\n";
++					$count++;
++				}
++				END { print $count + 0; }
++			'
++	)"
++	printf 'Removed %s unselected %s file(s).\n' "$removed" "$label"
++}
++
++if [ "$prune_unselected_metallibs" = "1" ]; then
++	prune_unselected ".metallib" "$cache_dir" -type f -name 'msl-v1-*.metallib'
++fi
++
++if [ "$prune_unselected_sources" = "1" ]; then
++	prune_unselected ".metal/.meta" "$cache_dir" -type f \( -name 'msl-v1-*.metal' -o -name 'msl-v1-*.meta' \)
++fi
++
++progress_total="$source_count"
++progress_done=0
++progress_built=0
++progress_skipped=0
++progress_width=30
++progress_start_epoch="$(date +%s)"
++progress_step=$(( (progress_total + 199) / 200 ))
++[ "$progress_step" -gt 0 ] || progress_step=1
++progress_tty=0
++[ -t 2 ] && progress_tty=1
++
++format_duration() {
++	local seconds="$1"
++	local hours=$((seconds / 3600))
++	local minutes=$(((seconds % 3600) / 60))
++	local secs=$((seconds % 60))
++
++	printf '%02d:%02d:%02d' "$hours" "$minutes" "$secs"
++}
++
++progress_bar() {
++	local filled="$1"
++	local width="$2"
++	local bar=""
++	local i
++
++	for ((i = 0; i < filled; i++)); do bar="${bar}#"; done
++	for ((i = filled; i < width; i++)); do bar="${bar}-"; done
++	printf '%s' "$bar"
++}
++
++progress_render() {
++	local percent=0
++	local filled=0
++	local bar
++	local now_epoch
++	local elapsed_seconds
++	local elapsed
++	local eta="--:--:--"
++
++	if [ "$progress_total" -gt 0 ]; then
++		percent=$(( progress_done * 100 / progress_total ))
++		filled=$(( progress_done * progress_width / progress_total ))
++	fi
++	bar="$(progress_bar "$filled" "$progress_width")"
++	now_epoch="$(date +%s)"
++	elapsed_seconds=$((now_epoch - progress_start_epoch))
++	elapsed="$(format_duration "$elapsed_seconds")"
++	if [ "$progress_done" -gt 0 ]; then
++		eta="$(format_duration $(( elapsed_seconds * (progress_total - progress_done) / progress_done )))"
++	fi
++
++	if [ "$progress_tty" = "1" ]; then
++		printf '\r[%s] %3d%% %d/%d built=%d skipped=%d elapsed=%s eta=%s' "$bar" "$percent" "$progress_done" "$progress_total" "$progress_built" "$progress_skipped" "$elapsed" "$eta" >&2
++	else
++		printf '[%s] %3d%% %d/%d built=%d skipped=%d elapsed=%s eta=%s\n' "$bar" "$percent" "$progress_done" "$progress_total" "$progress_built" "$progress_skipped" "$elapsed" "$eta" >&2
++	fi
++}
++
++progress_begin() {
++	printf 'Compiling %d MSL source(s) with %d job(s)...\n' "$progress_total" "$jobs" >&2
++	progress_render
++	return 0
++}
++
++progress_record() {
++	case "$1" in
++		built) progress_built=$((progress_built + 1)) ;;
++		skip) progress_skipped=$((progress_skipped + 1)) ;;
++	esac
++	progress_done=$((progress_done + 1))
++
++	if [ "$progress_done" -eq "$progress_total" ] || [ $((progress_done % progress_step)) -eq 0 ]; then
++		progress_render
++	fi
++	return 0
++}
++
++progress_finish() {
++	local elapsed_seconds
++	local elapsed
++
++	if [ "$progress_done" -lt "$progress_total" ]; then
++		progress_render
++	fi
++	if [ "$progress_tty" = "1" ]; then
++		printf '\n' >&2
++	fi
++	elapsed_seconds=$(($(date +%s) - progress_start_epoch))
++	elapsed="$(format_duration "$elapsed_seconds")"
++	printf 'Done: %d built, %d skipped, %d total in %s.\n' "$progress_built" "$progress_skipped" "$progress_total" "$elapsed" >&2
++}
++
++compile_one() {
++	local metal_path="$1"
++	local metallib_path="${metal_path%.metal}.metallib"
++	local meta_path="${metal_path%.metal}.meta"
++	local tmp_path="${metallib_path}.tmp.$$"
++	local log_path="${tmp_path}.log"
++	local fp_flags="4294967295"
++	local is_position_invariant="0"
++	local key
++	local value
++	local fp_flags_num
++	local relaxed_mask=$((0x00000004 | 0x00000008 | 0x00010000 | 0x00020000))
++	local fast_mask=$((0x00000001 | 0x00000002 | relaxed_mask))
++	local math_mode="safe"
++	local fp32_functions="precise"
++	local metal_args=()
++
++	if [ "$force" != "1" ] && [ -f "$metallib_path" ] && [ "$metallib_path" -nt "$metal_path" ]; then
++		printf 'skip\n'
++		return 0
++	fi
++
++	if [ -f "$meta_path" ]; then
++		while IFS='=' read -r key value; do
++			case "$key" in
++				fp_fast_math_flags) fp_flags="$value" ;;
++				is_position_invariant) is_position_invariant="$value" ;;
++			esac
++		done < "$meta_path"
++	fi
++
++	fp_flags_num=$((10#$fp_flags))
++	if [ $((fp_flags_num & fast_mask)) -eq "$fast_mask" ]; then
++		math_mode="fast"
++		fp32_functions="fast"
++	elif [ $((fp_flags_num & relaxed_mask)) -eq "$relaxed_mask" ]; then
++		math_mode="relaxed"
++	fi
++	metal_args=("-fmetal-math-mode=$math_mode" "-fmetal-math-fp32-functions=$fp32_functions")
++	if [ "$is_position_invariant" != "0" ]; then
++		metal_args+=("-fpreserve-invariance")
++	fi
++
++	rm -f "$tmp_path" "$log_path"
++	trap 'rm -f "$tmp_path" "$log_path"' RETURN
++	if ! "$metal_tool" "${metal_args[@]}" -o "$tmp_path" "$metal_path" 2> "$log_path"; then
++		printf 'compile failed: %s\n' "$metal_path" >&2
++		while IFS= read -r line; do printf '%s\n' "$line" >&2; done < "$log_path"
++		return 1
++	fi
++	mv "$tmp_path" "$metallib_path"
++	trap - RETURN
++	rm -f "$log_path"
++	printf 'built\n'
++}
++
++progress_begin
++if [ "$jobs" -eq 1 ]; then
++	while IFS= read -r -d '' metal_path; do
++		status="$(compile_one "$metal_path")"
++		progress_record "$status"
++	done < "$source_list"
++	progress_finish
++else
++	export metal_tool force
++	xargs -0 -n 1 -P "$jobs" bash -c '
++		set -euo pipefail
++		metal_path="$1"
++		metallib_path="${metal_path%.metal}.metallib"
++		meta_path="${metal_path%.metal}.meta"
++		tmp_path="${metallib_path}.tmp.$$"
++		log_path="${tmp_path}.log"
++		fp_flags="4294967295"
++		is_position_invariant="0"
++		relaxed_mask=$((0x00000004 | 0x00000008 | 0x00010000 | 0x00020000))
++		fast_mask=$((0x00000001 | 0x00000002 | relaxed_mask))
++		math_mode="safe"
++		fp32_functions="precise"
++		metal_args=()
++
++		if [ "$force" != "1" ] && [ -f "$metallib_path" ] && [ "$metallib_path" -nt "$metal_path" ]; then
++			printf "skip\n"
++			exit 0
++		fi
++
++		if [ -f "$meta_path" ]; then
++			while IFS="=" read -r key value; do
++				case "$key" in
++					fp_fast_math_flags) fp_flags="$value" ;;
++					is_position_invariant) is_position_invariant="$value" ;;
++				esac
++			done < "$meta_path"
++		fi
++
++		fp_flags_num=$((10#$fp_flags))
++		if [ $((fp_flags_num & fast_mask)) -eq "$fast_mask" ]; then
++			math_mode="fast"
++			fp32_functions="fast"
++		elif [ $((fp_flags_num & relaxed_mask)) -eq "$relaxed_mask" ]; then
++			math_mode="relaxed"
++		fi
++		metal_args=("-fmetal-math-mode=$math_mode" "-fmetal-math-fp32-functions=$fp32_functions")
++		if [ "$is_position_invariant" != "0" ]; then
++			metal_args+=("-fpreserve-invariance")
++		fi
++
++		rm -f "$tmp_path" "$log_path"
++		trap '\''rm -f "$tmp_path" "$log_path"'\'' EXIT
++		if ! "$metal_tool" "${metal_args[@]}" -o "$tmp_path" "$metal_path" 2> "$log_path"; then
++			printf "compile failed: %s\n" "$metal_path" >&2
++			while IFS= read -r line; do printf "%s\n" "$line" >&2; done < "$log_path"
++			exit 1
++		fi
++		mv "$tmp_path" "$metallib_path"
++		trap - EXIT
++		rm -f "$log_path"
++		printf "built\n"
++	' _ < "$source_list" | {
++		while IFS= read -r status; do
++			progress_record "$status"
++		done
++		progress_finish
++	}
++fi

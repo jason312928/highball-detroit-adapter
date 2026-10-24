@@ -1,0 +1,6 @@
+Detroit MoltenVK unofficial version: 0.03
+Packaged: 2026-06-16T18:53:52Z
+MoltenVK commit: 3ea0f045
+MoltenVK tree state: dirty
+SPIRV-Cross commit: 05583ac1
+SPIRV-Cross tree state: clean

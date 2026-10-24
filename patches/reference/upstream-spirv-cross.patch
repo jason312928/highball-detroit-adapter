@@ -1,0 +1,73 @@
+diff --git a/spirv_cross_c.h b/spirv_cross_c.h
+index 30f1c459..fc1af753 100644
+--- a/spirv_cross_c.h
++++ b/spirv_cross_c.h
+@@ -300,6 +300,9 @@ typedef enum spvc_msl_shader_variable_format
+ 	SPVC_MSL_SHADER_VARIABLE_FORMAT_UINT16 = 2,
+ 	SPVC_MSL_SHADER_VARIABLE_FORMAT_ANY16 = 3,
+ 	SPVC_MSL_SHADER_VARIABLE_FORMAT_ANY32 = 4,
++	SPVC_MSL_SHADER_VARIABLE_FORMAT_FLOAT32 = 5,
++	SPVC_MSL_SHADER_VARIABLE_FORMAT_INT32 = 6,
++	SPVC_MSL_SHADER_VARIABLE_FORMAT_UINT32 = 7,
+ 
+ 	/* Deprecated names. */
+ 	SPVC_MSL_VERTEX_FORMAT_OTHER = SPVC_MSL_SHADER_VARIABLE_FORMAT_OTHER,
+diff --git a/spirv_msl.cpp b/spirv_msl.cpp
+index 566b27cd..e618957f 100644
+--- a/spirv_msl.cpp
++++ b/spirv_msl.cpp
+@@ -4607,6 +4607,15 @@ uint32_t CompilerMSL::add_interface_block(StorageClass storage, bool patch)
+ 				type.basetype = SPIRType::UShort;
+ 				type.width = 16;
+ 				break;
++			case MSL_SHADER_VARIABLE_FORMAT_FLOAT32:
++				type.basetype = SPIRType::Float;
++				type.width = 32;
++				break;
++			case MSL_SHADER_VARIABLE_FORMAT_INT32:
++				type.basetype = SPIRType::Int;
++				type.width = 32;
++				break;
++			case MSL_SHADER_VARIABLE_FORMAT_UINT32:
+ 			case MSL_SHADER_VARIABLE_FORMAT_ANY32:
+ 			default:
+ 				type.basetype = SPIRType::UInt;
+@@ -4648,7 +4657,7 @@ uint32_t CompilerMSL::add_interface_block(StorageClass storage, bool patch)
+ 		}
+ 	}
+ 
+-	if (capture_output_to_buffer && storage == StorageClassOutput)
++	if (storage == StorageClassOutput && get_entry_point().model != ExecutionModelFragment)
+ 	{
+ 		// For captured output, add all inputs from the next stage to ensure
+ 		// the struct containing them is the correct size and layout. This is
+@@ -4675,6 +4684,15 @@ uint32_t CompilerMSL::add_interface_block(StorageClass storage, bool patch)
+ 				type.basetype = SPIRType::UShort;
+ 				type.width = 16;
+ 				break;
++			case MSL_SHADER_VARIABLE_FORMAT_FLOAT32:
++				type.basetype = SPIRType::Float;
++				type.width = 32;
++				break;
++			case MSL_SHADER_VARIABLE_FORMAT_INT32:
++				type.basetype = SPIRType::Int;
++				type.width = 32;
++				break;
++			case MSL_SHADER_VARIABLE_FORMAT_UINT32:
+ 			case MSL_SHADER_VARIABLE_FORMAT_ANY32:
+ 			default:
+ 				type.basetype = SPIRType::UInt;
+diff --git a/spirv_msl.hpp b/spirv_msl.hpp
+index 37eea5ea..eddde7dd 100644
+--- a/spirv_msl.hpp
++++ b/spirv_msl.hpp
+@@ -45,6 +45,9 @@ enum MSLShaderVariableFormat
+ 	MSL_SHADER_VARIABLE_FORMAT_UINT16 = 2,
+ 	MSL_SHADER_VARIABLE_FORMAT_ANY16 = 3,
+ 	MSL_SHADER_VARIABLE_FORMAT_ANY32 = 4,
++	MSL_SHADER_VARIABLE_FORMAT_FLOAT32 = 5,
++	MSL_SHADER_VARIABLE_FORMAT_INT32 = 6,
++	MSL_SHADER_VARIABLE_FORMAT_UINT32 = 7,
+ 
+ 	// Deprecated aliases.
+ 	MSL_VERTEX_FORMAT_OTHER = MSL_SHADER_VARIABLE_FORMAT_OTHER,
