@@ -158,6 +158,14 @@ def main():
     a = p.parse_args()
     base = a.highball_root.expanduser().resolve()
     token = check(base)
+    routing_state = base / ".detroit-adapter/audio-routing-v2/transaction.json"
+    if routing_state.exists() and read(routing_state)["status"] in ["installed", "installing"]:
+        import routingfix
+        if a.operation == "rollback":
+            raise ValueError("Roll back audio routing first with audio/rollback-routing.sh --apply")
+        routingfix.verify(base, read(routing_state))
+        print("Audio routing v2 is installed and verified; v1 remains its rollback baseline.")
+        return
     lib = candidate()
     state = base / ".detroit-adapter/audio-v1"
     if state.is_symlink():

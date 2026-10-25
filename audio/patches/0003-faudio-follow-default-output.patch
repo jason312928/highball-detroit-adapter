@@ -1,0 +1,323 @@
+--- a/libs/faudio/src/FAudio_platform_win32.c
++++ b/libs/faudio/src/FAudio_platform_win32.c
+@@ -52,6 +52,7 @@
+ 	IAudioClient *client;
+ 	HANDLE audioThread;
+ 	HANDLE stopEvent;
++	HANDLE audioEvent;
+ };
+ 
+ struct FAudioAudioClientThreadArgs
+@@ -61,6 +62,10 @@
+ 	HANDLE events[2];
+ 	FAudio *audio;
+ 	UINT updateSize;
++	struct FAudioWin32PlatformData *platform;
++	WCHAR *endpointId;
++	REFERENCE_TIME duration;
++	BOOL followDefault;
+ };
+ 
+ void FAudio_Log(char const *msg)
+@@ -119,7 +124,7 @@
+ 	{
+ 		hr = IAudioRenderClient_GetBuffer(
+ 			client,
+-			frames - padding,
++			args->updateSize,
+ 			&buffer
+ 		);
+ 		if (FAILED(hr)) return hr;
+@@ -150,52 +155,127 @@
+ 	return hr;
+ }
+ 
++/* Detroit routing: keep the voice graph and mix format while replacing only WASAPI. */
++static HRESULT FAudio_CreateAudioClient(
++	IMMDevice *device, WAVEFORMATEXTENSIBLE *format, HANDLE event,
++	REFERENCE_TIME duration, IAudioClient **client)
++{
++	HRESULT hr;
++	*client = NULL;
++	hr = IMMDevice_Activate(device, &IID_IAudioClient, CLSCTX_ALL, NULL, (void **)client);
++	if (FAILED(hr)) return hr;
++	hr = IAudioClient_Initialize(*client, AUDCLNT_SHAREMODE_SHARED,
++		AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
++		duration * 3, 0, &format->Format, &GUID_NULL);
++	if (SUCCEEDED(hr)) hr = IAudioClient_SetEventHandle(*client, event);
++	if (FAILED(hr)) { IAudioClient_Release(*client); *client = NULL; }
++	return hr;
++}
++
++static HRESULT FAudio_StartAudioClient(struct FAudioAudioClientThreadArgs *args,
++	IAudioClient *client, IAudioRenderClient **render, UINT *frames)
++{
++	HRESULT hr;
++	BYTE *silence;
++	*render = NULL;
++	hr = IAudioClient_GetService(client, &IID_IAudioRenderClient, (void **)render);
++	if (SUCCEEDED(hr)) hr = IAudioClient_GetBufferSize(client, frames);
++	if (SUCCEEDED(hr) && *frames < args->updateSize) hr = AUDCLNT_E_BUFFER_SIZE_ERROR;
++	/* Do not consume queued source audio before the replacement has started. */
++	if (SUCCEEDED(hr)) hr = IAudioRenderClient_GetBuffer(*render, *frames, &silence);
++	if (SUCCEEDED(hr)) hr = IAudioRenderClient_ReleaseBuffer(*render, *frames, AUDCLNT_BUFFERFLAGS_SILENT);
++	if (SUCCEEDED(hr)) hr = IAudioClient_Start(client);
++	if (FAILED(hr) && *render) { IAudioRenderClient_Release(*render); *render = NULL; }
++	return hr;
++}
++
++static void FAudio_CloseAudioClient(struct FAudioAudioClientThreadArgs *args,
++	IAudioRenderClient **render)
++{
++	if (args->client)
++	{
++		/* Removal may make Stop fail; cleanup must still finish. */
++		IAudioClient_Stop(args->client);
++		if (*render) IAudioRenderClient_Release(*render);
++		IAudioClient_Release(args->client);
++	}
++	*render = NULL;
++	args->client = NULL;
++	args->platform->client = NULL;
++}
++
+ static DWORD WINAPI FAudio_AudioClientThread(void *user)
+ {
+ 	struct FAudioAudioClientThreadArgs *args = user;
+-	IAudioRenderClient *render_client;
+-	HRESULT hr = S_OK;
+-	UINT frames, padding = 0;
++	IMMDeviceEnumerator *enumerator = NULL;
++	IAudioRenderClient *render = NULL;
++	UINT frames = 0, padding = 0;
++	ULONGLONG nextCheck = 0;
++	HRESULT hr, com_hr;
++	DWORD wait;
+ 
+ 	FAudio_set_thread_name(__func__);
+-
+-	hr = IAudioClient_GetService(
+-		args->client,
+-		&IID_IAudioRenderClient,
+-		(void **)&render_client
+-	);
+-	FAudio_assert(!FAILED(hr) && "Failed to get IAudioRenderClient service!");
+-
+-	hr = IAudioClient_GetBufferSize(args->client, &frames);
+-	FAudio_assert(!FAILED(hr) && "Failed to get IAudioClient buffer size!");
+-
+-	hr = FAudio_FillAudioClientBuffer(args, render_client, frames, 0);
+-	FAudio_assert(!FAILED(hr) && "Failed to initialize IAudioClient buffer!");
+-
+-	hr = IAudioClient_Start(args->client);
+-	FAudio_assert(!FAILED(hr) && "Failed to start IAudioClient!");
+-
+-	while (WaitForMultipleObjects(2, args->events, FALSE, INFINITE) == WAIT_OBJECT_0)
+-	{
++	com_hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
++	CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_INPROC_SERVER,
++		&IID_IMMDeviceEnumerator, (void **)&enumerator);
++	hr = FAudio_StartAudioClient(args, args->client, &render, &frames);
++	if (FAILED(hr)) FAudio_CloseAudioClient(args, &render);
++
++	while (WaitForSingleObject(args->events[1], 0) != WAIT_OBJECT_0)
++	{
++		if (args->followDefault && enumerator && GetTickCount64() >= nextCheck)
++		{
++			IMMDevice *device = NULL;
++			WCHAR *id = NULL;
++			nextCheck = GetTickCount64() + 500;
++			hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint(enumerator, eRender, eConsole, &device);
++			if (SUCCEEDED(hr)) hr = IMMDevice_GetId(device, &id);
++			if (SUCCEEDED(hr) && (!args->client || !args->endpointId || lstrcmpW(id, args->endpointId)))
++			{
++				IAudioClient *replacement = NULL;
++				IAudioRenderClient *replacementRender = NULL;
++				UINT replacementFrames = 0;
++				hr = FAudio_CreateAudioClient(device, &args->format, args->events[0],
++					args->duration, &replacement);
++				if (SUCCEEDED(hr))
++					hr = FAudio_StartAudioClient(args, replacement, &replacementRender, &replacementFrames);
++				if (SUCCEEDED(hr))
++				{
++					FAudio_CloseAudioClient(args, &render);
++					args->client = replacement;
++					args->platform->client = replacement;
++					render = replacementRender;
++					frames = replacementFrames;
++					CoTaskMemFree(args->endpointId);
++					args->endpointId = id;
++					id = NULL;
++					OutputDebugStringA("HB_DETROIT_AUDIO_V2: default output stream rebound\n");
++				}
++				else if (replacement) IAudioClient_Release(replacement);
++			}
++			CoTaskMemFree(id);
++			if (device) IMMDevice_Release(device);
++		}
++		/* A finite wait allows device discovery even when the old endpoint stops signalling. */
++		wait = WaitForMultipleObjects(2, args->events, FALSE, 100);
++		if (wait == WAIT_OBJECT_0 + 1 || wait == WAIT_FAILED) break;
++		if (wait != WAIT_OBJECT_0 || !args->client) continue;
+ 		hr = IAudioClient_GetCurrentPadding(args->client, &padding);
+-		if (hr == AUDCLNT_E_DEVICE_INVALIDATED)
++		if (SUCCEEDED(hr)) hr = FAudio_FillAudioClientBuffer(args, render, frames, padding);
++		if (FAILED(hr))
+ 		{
+-			/* Device was removed, just exit */
+-			break;
++			OutputDebugStringA("HB_DETROIT_AUDIO_V2: endpoint unavailable; waiting for recovery\n");
++			FAudio_CloseAudioClient(args, &render);
+ 		}
+-		FAudio_assert(!FAILED(hr) && "Failed to get IAudioClient current padding!");
+-
+-		hr = FAudio_FillAudioClientBuffer(args, render_client, frames, padding);
+-		FAudio_assert(!FAILED(hr) && "Failed to fill IAudioClient buffer!");
+-	}
+-
+-	hr = IAudioClient_Stop(args->client);
+-	FAudio_assert(!FAILED(hr) && "Failed to stop IAudioClient!");
+-
+-	IAudioRenderClient_Release(render_client);
++	}
++	FAudio_CloseAudioClient(args, &render);
++	if (enumerator) IMMDeviceEnumerator_Release(enumerator);
++	if (SUCCEEDED(com_hr)) CoUninitialize();
++	CoTaskMemFree(args->endpointId);
+ 	FAudio_free(args);
+ 	return 0;
+ }
++
+ 
+ /* Sets `defaultDeviceIndex` to the default audio device index in
+  * `deviceCollection`.
+@@ -289,6 +369,8 @@
+ 	uint32_t actualIndex;
+ 
+ 	*device = NULL;
++	if (deviceIndex == 0)
++		return IMMDeviceEnumerator_GetDefaultAudioEndpoint(device_enumerator, eRender, eConsole, device);
+ 
+ 	hr = IMMDeviceEnumerator_EnumAudioEndpoints(
+ 		device_enumerator,
+@@ -346,6 +428,7 @@
+ 	IMMDevice *device = NULL;
+ 	HRESULT hr;
+ 	HANDLE audioEvent = NULL;
++	WCHAR follow[2];
+ 	BOOL has_sse2 = IsProcessorFeaturePresent(PF_XMMI64_INSTRUCTIONS_AVAILABLE);
+ #if defined(__aarch64__) || defined(_M_ARM64) || defined(__arm64ec__) || defined(_M_ARM64EC)
+ 	BOOL has_neon = TRUE;
+@@ -362,10 +445,11 @@
+ 	*platformDevice = NULL;
+ 
+ 	args = FAudio_malloc(sizeof(*args));
+-	FAudio_assert(!!args && "Failed to allocate FAudio thread args!");
++	if (!args) { FAudio_PlatformRelease(); return; }
++	FAudio_zero(args, sizeof(*args));
+ 
+ 	data = FAudio_malloc(sizeof(*data));
+-	FAudio_assert(!!data && "Failed to allocate FAudio platform data!");
++	if (!data) { FAudio_free(args); FAudio_PlatformRelease(); return; }
+ 	FAudio_zero(data, sizeof(*data));
+ 
+ 	args->format.Format.wFormatTag = mixFormat->Format.wFormatTag;
+@@ -388,40 +472,22 @@
+ 	}
+ 
+ 	audioEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+-	FAudio_assert(!!audioEvent && "Failed to create FAudio thread buffer event!");
++	if (!audioEvent) goto fail;
++	data->audioEvent = audioEvent;
+ 
+ 	data->stopEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+-	FAudio_assert(!!data->stopEvent && "Failed to create FAudio thread stop event!");
++	if (!data->stopEvent) goto fail;
+ 
+ 	hr = FAudio_OpenDevice(deviceIndex, &device);
+-	FAudio_assert(!FAILED(hr) && "Failed to get audio device!");
+-
+-	hr = IMMDevice_Activate(
+-		device,
+-		&IID_IAudioClient,
+-		CLSCTX_ALL,
+-		NULL,
+-		(void **)&data->client
+-	);
+-	FAudio_assert(!FAILED(hr) && "Failed to create audio client!");
+-	IMMDevice_Release(device);
+-
++	if (FAILED(hr)) goto fail;
++	hr = IMMDevice_GetId(device, &args->endpointId);
++	if (FAILED(hr)) goto fail;
+ 	if (flags & FAUDIO_1024_QUANTUM) duration = 213333;
+ 	else duration = 100000;
+-
+-	hr = IAudioClient_Initialize(
+-		data->client,
+-		AUDCLNT_SHAREMODE_SHARED,
+-		AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+-		duration * 3,
+-		0,
+-		&args->format.Format,
+-		&GUID_NULL
+-	);
+-	FAudio_assert(!FAILED(hr) && "Failed to initialize audio client!");
+-
+-	hr = IAudioClient_SetEventHandle(data->client, audioEvent);
+-	FAudio_assert(!FAILED(hr) && "Failed to set audio client event!");
++	hr = FAudio_CreateAudioClient(device, &args->format, audioEvent, duration, &data->client);
++	IMMDevice_Release(device);
++	device = NULL;
++	if (FAILED(hr)) goto fail;
+ 
+ 	mixFormat->Format.wFormatTag = args->format.Format.wFormatTag;
+ 	mixFormat->Format.nChannels = args->format.Format.nChannels;
+@@ -446,6 +512,9 @@
+ 		mixFormat->Format.cbSize = sizeof(FAudioWaveFormatEx);
+ 	}
+ 
++	args->platform = data;
++	args->duration = duration;
++	args->followDefault = deviceIndex == 0 && GetEnvironmentVariableW(L"HB_DETROIT_AUDIO_FOLLOW_DEFAULT", follow, 2) == 1 && follow[0] == L'1';
+ 	args->client = data->client;
+ 	args->events[0] = audioEvent;
+ 	args->events[1] = data->stopEvent;
+@@ -454,20 +523,35 @@
+ 	else args->updateSize = args->format.Format.nSamplesPerSec / 100;
+ 
+ 	data->audioThread = CreateThread(NULL, 0, &FAudio_AudioClientThread, args, 0, NULL);
+-	FAudio_assert(!!data->audioThread && "Failed to create audio client thread!");
++	if (!data->audioThread) goto fail;
+ 
+ 	*updateSize = args->updateSize;
+ 	*platformDevice = data;
+ 	return;
++
++fail:
++	OutputDebugStringA("HB_DETROIT_AUDIO_V2: output initialization failed safely\n");
++	if (device) IMMDevice_Release(device);
++	if (data->client) IAudioClient_Release(data->client);
++	if (data->stopEvent) CloseHandle(data->stopEvent);
++	if (audioEvent) CloseHandle(audioEvent);
++	CoTaskMemFree(args->endpointId);
++	FAudio_free(args);
++	FAudio_free(data);
++	FAudio_PlatformRelease();
+ }
+ 
+ void FAudio_PlatformQuit(void* platformDevice)
+ {
+ 	struct FAudioWin32PlatformData *data = platformDevice;
+ 
++	if (!data) return;
+ 	SetEvent(data->stopEvent);
+ 	WaitForSingleObject(data->audioThread, INFINITE);
+-	if (data->client) IAudioClient_Release(data->client);
++	CloseHandle(data->audioThread);
++	CloseHandle(data->stopEvent);
++	CloseHandle(data->audioEvent);
++	FAudio_free(data);
+ 	if (kernelbase)
+ 	{
+ 		my_SetThreadDescription = NULL;

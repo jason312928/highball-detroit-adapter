@@ -1,0 +1,146 @@
+--- a/dlls/mmdevapi/devenum.c
++++ b/dlls/mmdevapi/devenum.c
+@@ -70,6 +70,7 @@
+ 
+ static MMDevEnumImpl enumerator;
+ static struct list device_list = LIST_INIT(device_list);
++static CRITICAL_SECTION detroit_device_lock = {NULL, -1, 0, 0, 0, 0};
+ 
+ typedef struct MMDevColImpl
+ {
+@@ -946,6 +947,7 @@
+     This->devices_count = 0;
+     *ppv = &This->IMMDeviceCollection_iface;
+ 
++    EnterCriticalSection(&detroit_device_lock);
+     LIST_FOR_EACH_ENTRY(cur, &device_list, MMDevice, entry)
+     {
+         if ((cur->flow == flow || flow == eAll) && (cur->state & state))
+@@ -955,8 +957,13 @@
+     if (This->devices_count)
+     {
+         This->devices = malloc(This->devices_count * sizeof(IMMDevice *));
+-        if (!This->devices_count)
++        if (!This->devices)
++        {
++            LeaveCriticalSection(&detroit_device_lock);
++            free(This);
++            *ppv = NULL;
+             return E_OUTOFMEMORY;
++        }
+ 
+         LIST_FOR_EACH_ENTRY(cur, &device_list, MMDevice, entry)
+         {
+@@ -969,6 +976,7 @@
+         }
+     }
+ 
++    LeaveCriticalSection(&detroit_device_lock);
+     return S_OK;
+ }
+ 
+@@ -1125,10 +1133,64 @@
+     return MMDevCol_Create(devices, flow, mask);
+ }
+ 
++/* Opt-in for the private Detroit engine. Query the backend instead of the startup snapshot.
++ * Never replace an MMDevice which may be held by a live IAudioClient. */
++static HRESULT detroit_default_render_device(IMMDevice **result)
++{
++    struct get_endpoint_ids_params params = {0};
++    MMDevice *dev, *found = NULL;
++    const char *device_name;
++    const WCHAR *name;
++    GUID guid;
++    HRESULT hr;
++
++    TRACE("HB_DETROIT_AUDIO_V2: refreshing default render endpoint\n");
++    params.flow = eRender;
++    params.size = 1024;
++    EnterCriticalSection(&detroit_device_lock);
++    do
++    {
++        free(params.endpoints);
++        params.endpoints = NULL;
++        if (params.size > 16 * 1024 * 1024 || !(params.endpoints = malloc(params.size)))
++        {
++            params.result = E_OUTOFMEMORY;
++            break;
++        }
++        params.result = E_FAIL;
++        __wine_unix_call(drvs.module_unixlib, get_endpoint_ids, &params);
++    } while (params.result == HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER));
++    hr = params.result;
++    if (SUCCEEDED(hr) && (!params.num || params.default_idx >= params.num)) hr = E_NOTFOUND;
++    if (SUCCEEDED(hr))
++    {
++        name = (const WCHAR *)((const char *)params.endpoints + params.endpoints[params.default_idx].name);
++        device_name = (const char *)params.endpoints + params.endpoints[params.default_idx].device;
++        get_device_guid(eRender, device_name, &guid);
++        LIST_FOR_EACH_ENTRY(dev, &device_list, MMDevice, entry)
++            if (dev->flow == eRender && IsEqualGUID(&dev->devguid, &guid)) { found = dev; break; }
++        if (!found)
++        {
++            found = MMDevice_Create(name, &guid, eRender, DEVICE_STATE_ACTIVE, FALSE);
++            if (found) set_format(found);
++        }
++        if (!found) hr = E_OUTOFMEMORY;
++        else
++        {
++            *result = &found->IMMDevice_iface;
++            IMMDevice_AddRef(*result);
++        }
++    }
++    free(params.endpoints);
++    LeaveCriticalSection(&detroit_device_lock);
++    return hr;
++}
++
++
+ static HRESULT WINAPI MMDevEnum_GetDefaultAudioEndpoint(IMMDeviceEnumerator *iface, EDataFlow flow, ERole role, IMMDevice **device)
+ {
+     MMDevEnumImpl *This = impl_from_IMMDeviceEnumerator(iface);
+-    WCHAR reg_key[256];
++    WCHAR reg_key[256], follow[2];
+     HKEY key;
+     HRESULT hr;
+ 
+@@ -1197,10 +1259,13 @@
+         RegCloseKey(key);
+     }
+ 
++    if (flow == eRender && GetEnvironmentVariableW(L"HB_DETROIT_AUDIO_FOLLOW_DEFAULT", follow, 2) == 1 && follow[0] == L'1')
++        return detroit_default_render_device(device);
++
+     if (flow == eRender)
+-        *device = &MMDevice_def_play->IMMDevice_iface;
++        *device = MMDevice_def_play ? &MMDevice_def_play->IMMDevice_iface : NULL;
+     else
+-        *device = &MMDevice_def_rec->IMMDevice_iface;
++        *device = MMDevice_def_rec ? &MMDevice_def_rec->IMMDevice_iface : NULL;
+ 
+     if (!*device)
+         return E_NOTFOUND;
+@@ -1219,6 +1284,8 @@
+     if(!name || !device)
+         return E_POINTER;
+ 
++    *device = NULL;
++    EnterCriticalSection(&detroit_device_lock);
+     LIST_FOR_EACH_ENTRY(impl, &device_list, MMDevice, entry)
+     {
+         HRESULT hr;
+@@ -1236,11 +1303,13 @@
+             CoTaskMemFree(str);
+             IMMDevice_AddRef(dev);
+             *device = dev;
++            LeaveCriticalSection(&detroit_device_lock);
+             return S_OK;
+         }
+         CoTaskMemFree(str);
+     }
+     TRACE("Could not find device %s\n", debugstr_w(name));
++    LeaveCriticalSection(&detroit_device_lock);
+     return E_INVALIDARG;
+ }
+ 

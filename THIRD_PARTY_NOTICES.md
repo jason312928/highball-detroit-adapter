@@ -18,3 +18,7 @@ The audio changes derive from Wine (LGPL-2.1-or-later) and its bundled FAudio (z
 The diagnostic library links SPIRV-Cross, SPIRV-Tools and cereal. Their complete notices are retained in licenses/ along with SPIRV-Headers notices. Binary release archives include these files.
 
 `prepare-metal.sh` downloads a pinned Apple Metal Toolchain to the local installation only. Apple binaries remain subject to Apple’s terms and are not included in this repository or its release assets. The asset key in the lock is public Apple distribution metadata. Microsoft Visual C++ runtimes are prerequisites obtained from Microsoft, not redistributed here.
+
+## Audio routing update
+
+The v2 audio source changes are distributed under Wine/FAudio's existing licenses. The MMDevice spatial-channel-order patch is preserved from the pinned Highball engine, credited to Tx (TxCsOffc, Highball #313), and remains LGPL-2.1-or-later. No game executable, game shaders, runtime logs, saves, device identities or personal configuration are distributed.

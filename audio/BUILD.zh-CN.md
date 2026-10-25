@@ -33,3 +33,11 @@ make -j2 "x86_64_CFLAGS=-g -O2 -ffile-prefix-map=$SOURCE=source -ffile-prefix-ma
 结果位于 `dlls/xaudio2_8/x86_64-windows/xaudio2_8.dll`。构建含时间戳，因此重新构建不保证产生完全相同的二进制哈希。安装器只接受已审查的候选 SHA-256，自建文件必须重新审查并更新清单。
 
 `src/` 中的回归测试保留了修补前后实际函数体，使用模拟 COM 设备操作，并用异常处理器捕获旧代码的空指针复现。用 LLVM-MinGW 编译，头文件使用固定源码树的 `libs/faudio/include`，链接 `ole32` 和 `uuid`，仅在独立测试 Bottle 运行。`device-error-test.c` 使用 `NDEBUG` 复现发行版行为；`mastering-error-test.c` 检查失败传递、正常创建和重复创建；`xaudio-load-probe.c` 验证完整 DLL 并静默处理真实输出缓冲区。
+
+## v2 音频路由构建与验证
+
+v2 需按顺序应用 `patches/0001` 至 `patches/0005`，构建 `dlls/xaudio2_8/x86_64-windows/xaudio2_8.dll` 和 `dlls/mmdevapi/x86_64-windows/mmdevapi.dll` 两个目标。第五个补丁保留 Highball 原引擎已有的空间音频声道顺序修正。随版本发布的完整对应源码已经打好补丁，无需重复应用。
+
+Apple Silicon 构建时将 `/Library/Developer/CommandLineTools/usr/bin` 放在 PATH 的 `/usr/bin` 前，避免 Rosetta 中的编译器选择器尝试加载仅有 arm64 的 libxcrun。完整命令及从真实函数提取的回归测试见[英文构建说明](BUILD.md#routing-regression-fixtures)。
+
+Highball 的真实 DLL 探针必须用 `WINEDLLPATH_PREPEND` 指向包含两个新版 DLL 的 `x86_64-windows` 上级目录，并核对内存映像时间戳。普通 `WINEDLLPATH` 排在引擎内建库之后，不能证明候选库实际加载。测试不会启动游戏，也不能替代真实 AirPods 切换验收。

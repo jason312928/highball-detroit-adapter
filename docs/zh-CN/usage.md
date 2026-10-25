@@ -34,29 +34,29 @@ Python 需要 **3.9 或更新版本**。预编译库不需要安装完整 Xcode�
   set -e
   mkdir -p "$HOME/Downloads/highball-detroit-setup"
   cd "$HOME/Downloads/highball-detroit-setup"
-  if [ -e highball-detroit-adapter-v0.3.0-preview.1 ]; then
+  if [ -e highball-detroit-adapter-v0.4.0-preview.1 ]; then
     echo "This version is already extracted; use the existing folder."
     exit 1
   fi
-  RELEASE="https://github.com/jason312928/highball-detroit-adapter/releases/download/v0.3.0-preview.1"
-  ASSET="highball-detroit-adapter-v0.3.0-preview.1-macos-x86_64.tar.gz"
+  RELEASE="https://github.com/jason312928/highball-detroit-adapter/releases/download/v0.4.0-preview.1"
+  ASSET="highball-detroit-adapter-v0.4.0-preview.1-macos-x86_64.tar.gz"
   curl --fail --location --output "$ASSET" "$RELEASE/$ASSET"
   curl --fail --location --output SHA256SUMS "$RELEASE/SHA256SUMS"
   awk -v asset="$ASSET" '$2 == asset { print; found=1 } END { if (!found) exit 1 }' \
     SHA256SUMS > selected.sha256
   shasum -a 256 -c selected.sha256
   tar -xzf "$ASSET"
-  cd highball-detroit-adapter-v0.3.0-preview.1
+  cd highball-detroit-adapter-v0.4.0-preview.1
   shasum -a 256 -c SHA256SUMS
 )
 ~~~
 
-所有校验项显示 `OK` 后继续。如果目录里已有 `highball-detroit-adapter-v0.3.0-preview.1`，命令会停止以免覆盖文件；使用之前下载好的目录即可。完整包已包含脚本和两种运行库，不必另下源码。
+所有校验项显示 `OK` 后继续。如果目录里已有 `highball-detroit-adapter-v0.4.0-preview.1`，命令会停止以免覆盖文件；使用之前下载好的目录即可。完整包已包含脚本和两种运行库，不必另下源码。
 
 接下来的步骤在**同一个终端窗口**执行，先进入脚本目录：
 
 ~~~bash
-cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-adapter-v0.3.0-preview.1"
+cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-adapter-v0.4.0-preview.1"
 ~~~
 
 包中的 `candidate.json` 是运行库的校验说明文件。后面的命令已填好它的位置，不用编辑它。
@@ -199,3 +199,7 @@ GAME_LOG="/这里粘贴启动日志路径"
 缓存脚本优先使用私有目录中固定版本的 Apple 编译器，没有时才尝试 Xcode。也可对两条缓存命令设置 `METAL_TOOL="/绝对路径/metal"`。已测试的 17A324 工具组合由 `prepare-metal.sh` 准备。脚本会读取 `HIGHBALL_HOME` 及 Highball 配置的数据位置；缓存脚本可用 `HIGHBALL_ROOT="/实际数据目录"` 覆盖。工具准备脚本则传入 `--highball-root "/实际数据目录"`。
 
 工具回滚仅将私有工具移到 `.detroit-adapter/tools-archived-*`；整个适配器回滚会把游戏、存档和缓存保留在 `.detroit-adapter/archived/`。保留的归档仍占磁盘空间，需要时再自行清理。不会更换共享引擎、系统 Vulkan 或全局音频设置。
+
+## 运行中切换音频输出更新
+
+v0.4.0-preview.1 完成原有音频安装后，执行 `./audio/install-routing.sh --dry-run`、`./audio/install-routing.sh --apply`、`./audio/verify-routing.sh`。应用前关闭 Detroit 和独立 Steam；完整包已包含两个新路由 DLL，重开独立 Steam 后继承默认输出设置。参阅[音频切换说明](../../audio/routing/README.zh-CN.md)。真实 AirPods 切换及更新后游戏运行仍待验证；顶点输入缺失和剧情局部模糊仍未解决。

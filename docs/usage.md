@@ -31,29 +31,29 @@ Open macOS Terminal, paste this entire block and press Return. A failed download
   set -e
   mkdir -p "$HOME/Downloads/highball-detroit-setup"
   cd "$HOME/Downloads/highball-detroit-setup"
-  if [ -e highball-detroit-adapter-v0.3.0-preview.1 ]; then
+  if [ -e highball-detroit-adapter-v0.4.0-preview.1 ]; then
     echo "This version is already extracted; use the existing folder."
     exit 1
   fi
-  RELEASE="https://github.com/jason312928/highball-detroit-adapter/releases/download/v0.3.0-preview.1"
-  ASSET="highball-detroit-adapter-v0.3.0-preview.1-macos-x86_64.tar.gz"
+  RELEASE="https://github.com/jason312928/highball-detroit-adapter/releases/download/v0.4.0-preview.1"
+  ASSET="highball-detroit-adapter-v0.4.0-preview.1-macos-x86_64.tar.gz"
   curl --fail --location --output "$ASSET" "$RELEASE/$ASSET"
   curl --fail --location --output SHA256SUMS "$RELEASE/SHA256SUMS"
   awk -v asset="$ASSET" '$2 == asset { print; found=1 } END { if (!found) exit 1 }' \
     SHA256SUMS > selected.sha256
   shasum -a 256 -c selected.sha256
   tar -xzf "$ASSET"
-  cd highball-detroit-adapter-v0.3.0-preview.1
+  cd highball-detroit-adapter-v0.4.0-preview.1
   shasum -a 256 -c SHA256SUMS
 )
 ~~~
 
-Continue when every checksum entry says `OK`. If `highball-detroit-adapter-v0.3.0-preview.1` already exists, the block stops to avoid overwriting files. Use that existing download instead. The full archive contains the scripts and both libraries; no separate source download is needed.
+Continue when every checksum entry says `OK`. If `highball-detroit-adapter-v0.4.0-preview.1` already exists, the block stops to avoid overwriting files. Use that existing download instead. The full archive contains the scripts and both libraries; no separate source download is needed.
 
 Run the remaining steps in the **same Terminal window**, starting in the scripts directory:
 
 ~~~bash
-cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-adapter-v0.3.0-preview.1"
+cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-adapter-v0.4.0-preview.1"
 ~~~
 
 The downloaded `candidate.json` describes the library and its checksums. Its path is already filled in below; do not edit it.
@@ -196,3 +196,7 @@ Already using an older adapter? Download and extract this release into a **new f
 The cache wrapper prefers the private pinned compiler. An existing Xcode compiler is a fallback, or select one explicitly with `METAL_TOOL="/absolute/path/to/metal"` on both cache commands. The reviewed 17A324 workflow is provided by `prepare-metal.sh`. `HIGHBALL_HOME` and Highball’s configured data location are detected; `HIGHBALL_ROOT="/actual/data/folder"` overrides the cache wrapper’s location. For tool preparation, pass `--highball-root "/actual/data/folder"` instead.
 
 Tool rollback archives only the private tools under `.detroit-adapter/tools-archived-*`. Full adapter rollback retains game files, saves and caches in `.detroit-adapter/archived/`. Retained archives consume space until deliberately removed. No shared engine, system Vulkan installation or global audio setting is changed.
+
+## Runtime audio output update
+
+For v0.4.0-preview.1, after the existing audio installation, run `./audio/install-routing.sh --dry-run`, `./audio/install-routing.sh --apply`, and `./audio/verify-routing.sh`. Close Detroit and its private Steam before applying. The full kit includes both routing DLLs; restart private Steam to inherit the default-output setting. See [routing notes](../audio/routing/README.md). Physical AirPods switching and post-update gameplay remain unverified; missing vertex inputs and cinematic blur remain unresolved.

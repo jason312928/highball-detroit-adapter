@@ -1,5 +1,5 @@
 {
-  "release": "v0.3.0-preview.1",
+  "release": "v0.4.0-preview.1",
   "software_baseline": {
     "highball": "0.10.22",
     "engine": "x64-crossover26.3-r28",
@@ -55,5 +55,32 @@
     "toolchain_signature_and_hashes": "passed",
     "toolchain_repeat_and_archive_rollback": "passed",
     "fresh_mac_full_game_install": "not_performed"
+  },
+  "audio_routing_v2": {
+    "build": "passed",
+    "routing_simulation_scenarios": 8,
+    "endpoint_identity_failure_resize_concurrency": "passed",
+    "actual_built_PE_images_loaded": "passed",
+    "actual_silent_buffer_consumption": "passed",
+    "all_five_source_patches_reconstruct_exactly": true,
+    "installer_test_suite": {
+      "total": 43,
+      "passed": 42,
+      "skipped": 1,
+      "skip_reason": "optional Highball CLI test not configured"
+    },
+    "physical_airpods_switch": "not_yet_validated",
+    "physical_device_sample_rate_and_channel_change": "not_yet_validated",
+    "gameplay_after_update": "not_yet_validated",
+    "latest_game_exit_cause": "not_established"
+  },
+  "graphics_followup": {
+    "missing_vertex_input": "unresolved",
+    "pipeline_pairs_examined": 48,
+    "pairs_still_requiring_missing_inputs_after_dead_code_pruning": 47,
+    "pipeline_pruning_deployed": false,
+    "cinematic_local_blur": "cause_unconfirmed",
+    "game_executable_modified": false,
+    "shader_cache_deleted": false
   }
 }

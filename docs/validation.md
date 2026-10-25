@@ -57,3 +57,11 @@ xcrun clang -arch x86_64 -fobjc-arc -framework Foundation -framework Metal \
 ~~~
 
 A zero exit status means the expected rejection was reproduced, not that the game was repaired.
+
+## v0.4 audio routing and graphics follow-up
+
+The routing candidate passed compilation, eight deterministic stream scenarios, endpoint identity/error/resize/concurrency tests and real silent-buffer playback with the exact built PE images. The Python suite ran 43 tests: 42 passed and the optional Highball CLI check was skipped. All five audio patches reconstruct the four modified source files exactly from the pinned archive.
+
+An investigation of 48 locally captured vertex/fragment combinations found that 47 still require absent vertex inputs after dead-code pruning. That experiment is not deployed. No invented vertex attributes, scene modifications, EXE patch or cache deletion is part of this update. Cinematic local blur may resemble the depth-of-field issue discussed [upstream](https://github.com/KhronosGroup/MoltenVK/issues/2054#issuecomment-4660539730), but its cause has not been established here.
+
+Physical AirPods output switching, physical format changes, the latest abnormal exit and gameplay stability after the routing update are not yet validated. A successful build or silent-buffer test is not a claim that the game is fully fixed.

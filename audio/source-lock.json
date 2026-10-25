@@ -26,5 +26,30 @@
     "gameplay_validated": false,
     "ordinary_gameplay_reported": true,
     "validation_note": "Ordinary post-fix play reported normal. Full scene coverage, physical endpoint reconnection and long-session acceptance are not completed."
+  },
+  "routing_candidate": {
+    "version": 2,
+    "files": {
+      "xaudio2_8.dll": {
+        "sha256": "bd1824664c279e48a72be4820a7af92d819ee0a8b530aa33fb9c0067861a4f65",
+        "accepted_previous_sha256": [
+          "ac38c792dfe1abfb5b2a94eebecc91caa05126e012e0e1deef3567cd1c897a7b",
+          "a19d4e199aaf70bb2990a51bf6fda9c4466612c9e2306365ff29f7d8983fd2cb"
+        ]
+      },
+      "mmdevapi.dll": {
+        "sha256": "b0576308edc122362508056477de77b891d1b6cf83f416804fa5c06c272d077a",
+        "accepted_previous_sha256": [
+          "18c9a63ead5b84c934b2e899000b15c87cab12451ad2f886530634150149d682"
+        ]
+      }
+    },
+    "physical_airpods_switch_validated": false,
+    "gameplay_after_routing_fix_validated": false,
+    "patches": {
+      "0003-faudio-follow-default-output.patch": "998dbe62f71e35c764777335c4fa0228eb866eeaeda4c10782fafa1a88d6c069",
+      "0004-mmdevapi-refresh-default-output.patch": "e8b26e0c5d2de37982d796dab1e7bb8f84faced0740d0242d2f072997fee01d2",
+      "0005-mmdevapi-preserve-spatial-channel-order.patch": "4f56403c24657cbd5517e10b2acfea48eacc8b5711de7889df3411437e8c15ca"
+    }
   }
 }
