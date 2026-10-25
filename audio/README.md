@@ -62,6 +62,6 @@ Backups are under `.detroit-adapter/audio-routing-v2/`. Rollback restores the st
 
 Eight deterministic routing scenarios and endpoint identity/error/absence/resize/concurrency tests passed. A real silent buffer was consumed after the exact built PE images were verified in memory. The Python suite ran 46 tests: 45 passed and the optional CLI check was skipped. The five patches reconstruct the modified source files from the pinned archive.
 
-Physical AirPods switching, physical sample-rate/channel changes and gameplay after this update remain unverified. The latest game exit, missing Vulkan vertex inputs and cinematic blur are not claimed fixed. See [routing details](routing/README.md), [source-lock.json](source-lock.json), [patches](patches/) and [build instructions](BUILD.md).
+macOS default-output changes, physical AirPods reconnection, sample-rate/channel changes and gameplay after this update remain unverified. The latest game exit, missing Vulkan vertex inputs and cinematic blur are not claimed fixed. See [routing details](routing/README.md), [source-lock.json](source-lock.json), [patches](patches/) and [build instructions](BUILD.md).
 
 Wine changes retain LGPL-2.1-or-later; FAudio retains its upstream zlib-style license. [License notices](licenses/) and corresponding source are included. No game files, shaders, raw logs, saves, device identities or personal configuration are distributed.

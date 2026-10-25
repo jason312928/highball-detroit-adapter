@@ -75,7 +75,16 @@
     "latest_game_exit_cause": "not_established",
     "live_client_configuration_check": "passed",
     "stale_client_regression": "passed",
-    "open_highball_install_guard": "passed"
+    "open_highball_install_guard": "passed",
+    "controlled_physical_endpoint_migration": {
+      "result": "passed",
+      "route": "AirPods -> speakers -> AirPods",
+      "selection": "temporary Windows default-output override in a disposable test prefix, then return to system default",
+      "system_default_output_changed": false,
+      "source_voice_preserved": true,
+      "silent_buffer_sample_counter_progressed_all_three_phases": true,
+      "limitation": "Does not establish Bluetooth disconnect/reconnect or in-game behavior"
+    }
   },
   "graphics_followup": {
     "missing_vertex_input": "unresolved",

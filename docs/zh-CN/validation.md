@@ -70,4 +70,4 @@ xcrun clang -arch x86_64 -fobjc-arc -framework Foundation -framework Metal \
 
 外部更新配置后，已保存的设置没有进入独立 Steam 的实际启动环境。在程序界面重新保存并冷启动独立 Steam 后，确认真实进程同时带有 `MTL_HUD_ENABLED=1` 和 `HB_DETROIT_AUDIO_FOLLOW_DEFAULT=1`。这项检查没有启动游戏。安装现要求先关闭 Highball，校验会拒绝未继承开关的旧客户端。增加 3 项回归测试，共 46 项，45 项通过，1 项可选 CLI 检查跳过。
 
-真实静音测试切换了物理端点并持续消耗缓冲，但测试中设备可用性变化，因此未接受“回到初始设备”的验收结果。真实重连仍待验证。
+随后在两个物理端点保持连接时，受控静音测试完整通过 AirPods → 扬声器 → AirPods。仅在独立测试 Wine 环境中临时选择另一 Windows 输出，再移除覆盖，macOS 默认输出没有改变。三个阶段的 SamplesPlayed 都持续增长，保留同一个声音对象。蓝牙断连/重连、macOS 默认输出自动变化和游戏内行为仍待验证。

@@ -4,7 +4,7 @@
 
 The new audio candidate follows the system default output during playback, rebuilds an invalidated WASAPI stream, and handles initialization failures without dereferencing failed COM results. It keeps the XAudio voice graph and mix format intact. It is installed only in the private Detroit engine and bottle.
 
-Deterministic routing and endpoint tests, actual DLL loading, silent-buffer consumption, and transaction tests passed. **Physical AirPods switching and gameplay after this change are still unverified. The latest game exit and missing vertex-input mappings are not claimed fixed. Cinematic blur remains unconfirmed.**
+Deterministic routing and endpoint tests, actual DLL loading, silent-buffer consumption, and transaction tests passed. **macOS default-output changes, physical AirPods reconnection and gameplay after this change are still unverified. The latest game exit and missing vertex-input mappings are not claimed fixed. Cinematic blur remains unconfirmed.**
 
 For an existing isolated installation, see [audio routing](audio/routing/README.md). The original Metal cache is retained.
 
