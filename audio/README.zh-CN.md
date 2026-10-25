@@ -6,7 +6,7 @@ v0.4 候选版本将原有音频查询/声音对象创建失败保护，与运�
 
 ## 安装
 
-已有独立环境可从 [v0.4.0-preview.1 Release](https://github.com/jason312928/highball-detroit-adapter/releases/tag/v0.4.0-preview.1) 下载音频升级包和 SHA256SUMS，按[英文说明](README.md#use)校验并解压；完整包也包含此 audio 目录。Git 源码不包含编译好的 DLL。
+已有独立环境可从 [v0.4.1-preview.1 Release](https://github.com/jason312928/highball-detroit-adapter/releases/tag/v0.4.1-preview.1) 下载音频升级包和 SHA256SUMS，按[英文说明](README.md#use)校验并解压；完整包也包含此 audio 目录。Git 源码不包含编译好的 DLL。
 
 关闭游戏及独立 Steam，在音频包目录执行：
 
@@ -33,7 +33,7 @@ v0.4 候选版本将原有音频查询/声音对象创建失败保护，与运�
 
 ## 验证范围
 
-8 个路由模拟场景及端点对象保持/失败/缺席/扩容/并发测试通过，真实加载的 PE 映像与构建一致，静音缓冲正常消耗。Python 测试共 43 项，42 项通过，未配置的可选 CLI 检查跳过。5 个补丁可从锁定源码包准确重建修改文件。
+8 个路由模拟场景及端点对象保持/失败/缺席/扩容/并发测试通过，真实加载的 PE 映像与构建一致，静音缓冲正常消耗。Python 测试共 46 项，45 项通过，未配置的可选 CLI 检查跳过。5 个补丁可从锁定源码包准确重建修改文件。
 
 真实 AirPods 切换、物理采样率与声道变化，以及更新后游戏运行仍待验证。不宣称已修复最新退出、缺失的 Vulkan 顶点输入或剧情局部模糊。详见[路由说明](routing/README.zh-CN.md)、[构建说明](BUILD.zh-CN.md)、[来源锁](source-lock.json)。
 

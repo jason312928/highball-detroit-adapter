@@ -31,29 +31,29 @@ Open macOS Terminal, paste this entire block and press Return. A failed download
   set -e
   mkdir -p "$HOME/Downloads/highball-detroit-setup"
   cd "$HOME/Downloads/highball-detroit-setup"
-  if [ -e highball-detroit-adapter-v0.4.0-preview.1 ]; then
+  if [ -e highball-detroit-adapter-v0.4.1-preview.1 ]; then
     echo "This version is already extracted; use the existing folder."
     exit 1
   fi
-  RELEASE="https://github.com/jason312928/highball-detroit-adapter/releases/download/v0.4.0-preview.1"
-  ASSET="highball-detroit-adapter-v0.4.0-preview.1-macos-x86_64.tar.gz"
+  RELEASE="https://github.com/jason312928/highball-detroit-adapter/releases/download/v0.4.1-preview.1"
+  ASSET="highball-detroit-adapter-v0.4.1-preview.1-macos-x86_64.tar.gz"
   curl --fail --location --output "$ASSET" "$RELEASE/$ASSET"
   curl --fail --location --output SHA256SUMS "$RELEASE/SHA256SUMS"
   awk -v asset="$ASSET" '$2 == asset { print; found=1 } END { if (!found) exit 1 }' \
     SHA256SUMS > selected.sha256
   shasum -a 256 -c selected.sha256
   tar -xzf "$ASSET"
-  cd highball-detroit-adapter-v0.4.0-preview.1
+  cd highball-detroit-adapter-v0.4.1-preview.1
   shasum -a 256 -c SHA256SUMS
 )
 ~~~
 
-Continue when every checksum entry says `OK`. If `highball-detroit-adapter-v0.4.0-preview.1` already exists, the block stops to avoid overwriting files. Use that existing download instead. The full archive contains the scripts and both libraries; no separate source download is needed.
+Continue when every checksum entry says `OK`. If `highball-detroit-adapter-v0.4.1-preview.1` already exists, the block stops to avoid overwriting files. Use that existing download instead. The full archive contains the scripts and both libraries; no separate source download is needed.
 
 Run the remaining steps in the **same Terminal window**, starting in the scripts directory:
 
 ~~~bash
-cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-adapter-v0.4.0-preview.1"
+cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-adapter-v0.4.1-preview.1"
 ~~~
 
 The downloaded `candidate.json` describes the library and its checksums. Its path is already filled in below; do not edit it.
@@ -199,4 +199,10 @@ Tool rollback archives only the private tools under `.detroit-adapter/tools-arch
 
 ## Runtime audio output update
 
-For v0.4.0-preview.1, after the existing audio installation, run `./audio/install-routing.sh --dry-run`, `./audio/install-routing.sh --apply`, and `./audio/verify-routing.sh`. Close Detroit and its private Steam before applying. The full kit includes both routing DLLs; restart private Steam to inherit the default-output setting. See [routing notes](../audio/routing/README.md). Physical AirPods switching and post-update gameplay remain unverified; missing vertex inputs and cinematic blur remain unresolved.
+For v0.4.1-preview.1, after the existing audio installation, run `./audio/install-routing.sh --dry-run`, `./audio/install-routing.sh --apply`, and `./audio/verify-routing.sh`. Close Detroit and its private Steam before applying. The full kit includes both routing DLLs; restart private Steam to inherit the default-output setting. See [routing notes](../audio/routing/README.md). Physical AirPods switching and post-update gameplay remain unverified; missing vertex inputs and cinematic blur remain unresolved.
+
+## Loaded settings versus saved settings
+
+Before installing or rolling back, close Highball as well as the game and its private Steam. The app may keep an older bottle configuration in memory after a file/CLI update. Reopen Highball afterwards. If changing HUD settings while it is already open, use its own Graphics switch so its in-memory state is updated.
+
+Verification now checks the actual running private clients for `HB_DETROIT_AUDIO_FOLLOW_DEFAULT=1`. A matching file hash and saved setting do not prove that a previously started Steam inherited them. Close stale private Steam before relaunching. HUD changes similarly require `MTL_HUD_ENABLED=1` in the launching process.

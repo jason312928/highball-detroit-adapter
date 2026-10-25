@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.4.1-preview.1
+
+- Reject audio installation/rollback while Highball is open, so its cached bottle settings cannot silently outlive the installed configuration.
+- Verify that running private Steam/game processes actually inherited the audio-follow setting, in addition to checking installed files.
+- Clarify that changing a file or CLI preference while Highball is open may require reloading the app's settings and restarting private Steam. Audio DLLs are unchanged from v0.4.0-preview.1.
+- 46 Python tests run: 45 passed, one optional CLI test skipped. Physical reconnect acceptance remains pending.
+
+
 ## Audio output routing — v0.4.0-preview.1
 
 The new audio candidate follows the system default output during playback, rebuilds an invalidated WASAPI stream, and handles initialization failures without dereferencing failed COM results. It keeps the XAudio voice graph and mix format intact. It is installed only in the private Detroit engine and bottle.

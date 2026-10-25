@@ -65,3 +65,9 @@ The routing candidate passed compilation, eight deterministic stream scenarios, 
 An investigation of 48 locally captured vertex/fragment combinations found that 47 still require absent vertex inputs after dead-code pruning. That experiment is not deployed. No invented vertex attributes, scene modifications, EXE patch or cache deletion is part of this update. Cinematic local blur may resemble the depth-of-field issue discussed [upstream](https://github.com/KhronosGroup/MoltenVK/issues/2054#issuecomment-4660539730), but its cause has not been established here.
 
 Physical AirPods output switching, physical format changes, the latest abnormal exit and gameplay stability after the routing update are not yet validated. A successful build or silent-buffer test is not a claim that the game is fully fixed.
+
+## v0.4.1 launch-configuration regression
+
+A saved setting did not reach a running private Steam client after an external configuration update. The app's own setting was resaved and Steam cold-started; the actual live process then carried both `MTL_HUD_ENABLED=1` and `HB_DETROIT_AUDIO_FOLLOW_DEFAULT=1`. No game was started for this check. Installation now requires Highball to be closed; verification rejects a stale running private client. Three added regression cases cover these paths (46 total tests, 45 passed, one optional CLI check skipped).
+
+A real silent-stream test exercised physical endpoints and kept consuming buffers, but its return-to-initial assertion was not accepted because device availability changed during the test. Physical reconnect acceptance remains pending.

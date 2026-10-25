@@ -1,5 +1,5 @@
 {
-  "release": "v0.4.0-preview.1",
+  "release": "v0.4.1-preview.1",
   "software_baseline": {
     "highball": "0.10.22",
     "engine": "x64-crossover26.3-r28",
@@ -64,15 +64,18 @@
     "actual_silent_buffer_consumption": "passed",
     "all_five_source_patches_reconstruct_exactly": true,
     "installer_test_suite": {
-      "total": 43,
-      "passed": 42,
+      "total": 46,
+      "passed": 45,
       "skipped": 1,
       "skip_reason": "optional Highball CLI test not configured"
     },
     "physical_airpods_switch": "not_yet_validated",
     "physical_device_sample_rate_and_channel_change": "not_yet_validated",
     "gameplay_after_update": "not_yet_validated",
-    "latest_game_exit_cause": "not_established"
+    "latest_game_exit_cause": "not_established",
+    "live_client_configuration_check": "passed",
+    "stale_client_regression": "passed",
+    "open_highball_install_guard": "passed"
   },
   "graphics_followup": {
     "missing_vertex_input": "unresolved",

@@ -6,7 +6,7 @@ The v0.4 candidate combines safe XAudio2 device-query/voice-creation failure han
 
 ## Use
 
-The full release archive includes this folder as `audio/`. If the isolated environment is already installed, download `highball-detroit-audiofix-v0.4.0-preview.1-macos-x86_64.tar.gz` and `SHA256SUMS` from the [release](https://github.com/jason312928/highball-detroit-adapter/releases/tag/v0.4.0-preview.1). Check the archive’s matching SHA-256 entry, extract it and open Terminal in the extracted `highball-detroit-audiofix-v0.4.0-preview.1` folder. The archive contains the DLL; the Git source checkout does not.
+The full release archive includes this folder as `audio/`. If the isolated environment is already installed, download `highball-detroit-audiofix-v0.4.1-preview.1-macos-x86_64.tar.gz` and `SHA256SUMS` from the [release](https://github.com/jason312928/highball-detroit-adapter/releases/tag/v0.4.1-preview.1). Check the archive’s matching SHA-256 entry, extract it and open Terminal in the extracted `highball-detroit-audiofix-v0.4.1-preview.1` folder. The archive contains the DLL; the Git source checkout does not.
 
 For an audio-only download, paste this block into Terminal. It stops if that version is already extracted; use the existing folder in that case.
 
@@ -15,16 +15,16 @@ For an audio-only download, paste this block into Terminal. It stops if that ver
   set -e
   mkdir -p "$HOME/Downloads/highball-detroit-setup"
   cd "$HOME/Downloads/highball-detroit-setup"
-  test ! -e highball-detroit-audiofix-v0.4.0-preview.1
-  RELEASE="https://github.com/jason312928/highball-detroit-adapter/releases/download/v0.4.0-preview.1"
-  ASSET="highball-detroit-audiofix-v0.4.0-preview.1-macos-x86_64.tar.gz"
+  test ! -e highball-detroit-audiofix-v0.4.1-preview.1
+  RELEASE="https://github.com/jason312928/highball-detroit-adapter/releases/download/v0.4.1-preview.1"
+  ASSET="highball-detroit-audiofix-v0.4.1-preview.1-macos-x86_64.tar.gz"
   curl --fail --location --output "$ASSET" "$RELEASE/$ASSET"
   curl --fail --location --output SHA256SUMS "$RELEASE/SHA256SUMS"
   awk -v asset="$ASSET" '$2 == asset { print; found=1 } END { if (!found) exit 1 }' \
     SHA256SUMS > selected.sha256
   shasum -a 256 -c selected.sha256
   tar -xzf "$ASSET"
-  cd highball-detroit-audiofix-v0.4.0-preview.1
+  cd highball-detroit-audiofix-v0.4.1-preview.1
   shasum -a 256 -c SHA256SUMS
 )
 ```
@@ -32,7 +32,7 @@ For an audio-only download, paste this block into Terminal. It stops if that ver
 Then enter the audio folder (or `audio/` inside the full bundle):
 
 ```bash
-cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-audiofix-v0.4.0-preview.1"
+cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-audiofix-v0.4.1-preview.1"
 ```
 
 On the reviewed baseline, close Detroit and the private Windows Steam/Wine programs, then run:
@@ -60,7 +60,7 @@ Backups are under `.detroit-adapter/audio-routing-v2/`. Rollback restores the st
 
 ## Validation
 
-Eight deterministic routing scenarios and endpoint identity/error/absence/resize/concurrency tests passed. A real silent buffer was consumed after the exact built PE images were verified in memory. The Python suite ran 43 tests: 42 passed and the optional CLI check was skipped. The five patches reconstruct the modified source files from the pinned archive.
+Eight deterministic routing scenarios and endpoint identity/error/absence/resize/concurrency tests passed. A real silent buffer was consumed after the exact built PE images were verified in memory. The Python suite ran 46 tests: 45 passed and the optional CLI check was skipped. The five patches reconstruct the modified source files from the pinned archive.
 
 Physical AirPods switching, physical sample-rate/channel changes and gameplay after this update remain unverified. The latest game exit, missing Vulkan vertex inputs and cinematic blur are not claimed fixed. See [routing details](routing/README.md), [source-lock.json](source-lock.json), [patches](patches/) and [build instructions](BUILD.md).
 

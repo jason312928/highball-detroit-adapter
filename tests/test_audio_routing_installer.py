@@ -51,6 +51,12 @@ class RoutingInstallerTests(unittest.TestCase):
         self.quiet = mock.patch.object(self.m.audiofix, "quiet")
         self.quiet.start()
         self.addCleanup(self.quiet.stop)
+        self.app_closed = mock.patch.object(self.m, "require_closed_highball")
+        self.app_closed.start()
+        self.addCleanup(self.app_closed.stop)
+        self.clients = mock.patch.object(self.m, "live_environments", return_value=[])
+        self.clients.start()
+        self.addCleanup(self.clients.stop)
 
     @staticmethod
     def write(path, data):
@@ -141,3 +147,21 @@ class RoutingInstallerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reviewed bundle"):
             self.invoke("rollback")
         self.assert_files(True)
+
+    def test_verify_rejects_stale_running_steam_environment(self):
+        self.invoke("install")
+        with mock.patch.object(self.m, "live_environments", return_value=[("steam.exe", None)]):
+            with self.assertRaisesRegex(ValueError, "running without"):
+                self.invoke("verify")
+
+    def test_verify_accepts_running_game_with_routing_flag(self):
+        self.invoke("install")
+        with mock.patch.object(self.m, "live_environments", return_value=[("steam.exe", "1"), ("DetroitBecomeHuman.exe", "1")]):
+            self.invoke("verify")
+
+    def test_open_highball_blocks_install_before_any_replacement(self):
+        with mock.patch.object(self.m, "require_closed_highball", side_effect=ValueError("Quit Highball")):
+            with self.assertRaisesRegex(ValueError, "Quit Highball"):
+                self.invoke("install")
+        self.assert_files(False)
+        self.assertFalse((self.base / self.m.STATE / "transaction.json").exists())

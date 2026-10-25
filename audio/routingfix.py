@@ -2,7 +2,10 @@
 """Install the Detroit-only default-output routing candidate; dry-run by default."""
 
 import argparse
+import ctypes
 import fcntl
+import subprocess
+import sys
 from pathlib import Path
 import shutil
 import struct
@@ -17,6 +20,43 @@ DIRS = (
     "engines/detroit-strict-003-r28/engine/lib/wine/x86_64-windows",
     "bottles/Detroit Isolated/drive_c/windows/system32",
 )
+
+
+def require_closed_highball():
+    rows = subprocess.run(["/bin/ps", "-axo", "comm="], text=True,
+                          capture_output=True, check=True).stdout.splitlines()
+    if any(row.strip().endswith("/Highball") for row in rows):
+        raise ValueError("Quit Highball before changing audio files/settings, so its next launch reloads the bottle configuration")
+
+
+def live_environments(base):
+    """Read only matching private clients; never print or save their full environment."""
+    if sys.platform != "darwin":
+        return []
+    prefix = str(base / "bottles/Detroit Isolated") + "/"
+    rows = subprocess.run(["/bin/ps", "-axo", "pid=,comm="], text=True,
+                          capture_output=True, check=True).stdout.splitlines()
+    system = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+    result = []
+    for row in rows:
+        parts = row.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        pid, command = parts
+        if not command.startswith(prefix) or Path(command).name.lower() not in ["steam.exe", "detroitbecomehuman.exe"]:
+            continue
+        mib = (ctypes.c_int * 3)(1, 49, int(pid))  # CTL_KERN, KERN_PROCARGS2
+        size = ctypes.c_size_t()
+        if system.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0:
+            raise ValueError("Cannot inspect the running private client; runtime configuration remains unverified")
+        data = ctypes.create_string_buffer(size.value)
+        if system.sysctl(mib, 3, data, ctypes.byref(size), None, 0) != 0 or size.value < 4:
+            raise ValueError("Private client exited during verification; retry")
+        argc = struct.unpack_from("i", data.raw)[0]
+        strings = [s.decode(errors="replace") for s in data.raw[4:size.value].split(b"\0") if s]
+        env = dict(s.split("=", 1) for s in strings[1 + argc:] if "=" in s)
+        result.append((Path(command).name, env.get(KEY)))
+    return result
 
 
 def manifest():
@@ -88,6 +128,9 @@ def verify(base, journal):
             raise ValueError("Installed routing DLL differs")
     if env_value(base) != ENABLED:
         raise ValueError("Default-output following is disabled")
+    for program, value in live_environments(base):
+        if value != "1":
+            raise ValueError(f"{program} is running without {KEY}=1; close the game and private Steam, reload Highball settings, then relaunch")
 
 
 def restore(base, state, journal):
@@ -159,6 +202,7 @@ def main():
               "install two audio DLLs in the private engine and bottle, with backups; enable default-output following") + ".")
         return
     audiofix.quiet(base)
+    require_closed_highball()
     state.mkdir(parents=True, exist_ok=True)
     lock = state / "lock"
     if lock.is_symlink():

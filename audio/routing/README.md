@@ -30,3 +30,9 @@ Rollback verifies and restores all four previous DLLs and the previous value of 
 Eight routing scenarios cover default changes, explicitly fixed outputs, failed replacement/retry, endpoint invalidation, temporary absence and service initialization failures. Endpoint tests cover identity preservation, failure/absence, buffer resizing and concurrent reuse. Real DLL image timestamps were checked against the built artifacts; a real silent XAudio buffer was consumed. Installer tests cover partial write recovery, rollback, settings preservation and path tampering.
 
 Physical AirPods reconnection, sample-rate/channel changes on a physical device, and gameplay stability remain unverified. There is no proof that the latest exit code 1 was caused by audio. Missing Vulkan vertex attributes and cinematic blur remain unresolved; this update does not fabricate attributes or alter the game executable.
+
+## Loaded settings versus saved settings
+
+Before installing or rolling back, close Highball as well as the game and its private Steam. The app may keep an older bottle configuration in memory after a file/CLI update. Reopen Highball afterwards. If changing HUD settings while it is already open, use its own Graphics switch so its in-memory state is updated.
+
+Verification now checks the actual running private clients for `HB_DETROIT_AUDIO_FOLLOW_DEFAULT=1`. A matching file hash and saved setting do not prove that a previously started Steam inherited them. Close stale private Steam before relaunching. HUD changes similarly require `MTL_HUD_ENABLED=1` in the launching process.

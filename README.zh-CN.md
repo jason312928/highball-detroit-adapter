@@ -1,6 +1,6 @@
 # 《底特律：变人》Highball 诊断工具
 
-## 音频输出切换 — v0.4.0-preview.1
+## 音频输出切换 — v0.4.1-preview.1
 
 新的音频候选修补支持播放中跟随系统默认输出、重建失效的 WASAPI 音频流，并在初始化失败时安全返回，保留 XAudio 声音对象和混音格式。只安装到 Detroit 独立引擎和环境。
 
@@ -37,7 +37,7 @@ Vertex attribute in_vfMsBindPosePosition(12) is missing from the vertex descript
 
 已审查组合为 Highball 0.10.22、x64-crossover26.3-r28 引擎及 Steam Windows 版游戏。安装会复制原环境、引擎和游戏，需为三者及至少 12 GiB 余量准备空间，通常超过 75 GiB。原游戏和共享引擎保留，回滚将测试环境的存档留在归档中。
 
-[v0.4.0-preview.1 Release](https://github.com/jason312928/highball-detroit-adapter/releases/tag/v0.4.0-preview.1) 提供完整安装包和较小的音频升级包，日常游玩的稳定性尚未验收。自己编译源码属于可选步骤，单独见 [构建说明](docs/zh-CN/build.md)。
+[v0.4.1-preview.1 Release](https://github.com/jason312928/highball-detroit-adapter/releases/tag/v0.4.1-preview.1) 提供完整安装包和较小的音频升级包，日常游玩的稳定性尚未验收。自己编译源码属于可选步骤，单独见 [构建说明](docs/zh-CN/build.md)。
 
 ## 验证
 

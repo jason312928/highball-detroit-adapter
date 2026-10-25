@@ -1,6 +1,6 @@
 # Detroit: Become Human on Highball
 
-## Audio output routing — v0.4.0-preview.1
+## Audio output routing — v0.4.1-preview.1
 
 The new audio candidate follows the system default output during playback, rebuilds an invalidated WASAPI stream, and handles initialization failures without dereferencing failed COM results. It keeps the XAudio voice graph and mix format intact. It is installed only in the private Detroit engine and bottle.
 
@@ -37,7 +37,7 @@ The [XAudio2 fix](audio/README.md) handles failed audio-device queries and propa
 
 The reviewed baseline is Highball 0.10.22 with x64-crossover26.3-r28 and the Windows Steam edition of the game. Installation copies the source environment, engine and game; allow space for all three plus at least 12 GiB spare, often more than 75 GiB. Original game files and the shared engine are preserved. Rollback retains the test environment's saves in an archive.
 
-The [v0.4.0-preview.1 release](https://github.com/jason312928/highball-detroit-adapter/releases/tag/v0.4.0-preview.1) includes a complete installation archive and a smaller audio-only upgrade. The full bundle now includes `prepare-metal.sh`: it obtains and verifies a pinned Apple compiler privately, without full Xcode. Apple tools, Microsoft DLLs and game-specific shaders are not redistributed. Long-session stability is not established. Source compilation is optional and documented separately in [Build](docs/build.md).
+The [v0.4.1-preview.1 release](https://github.com/jason312928/highball-detroit-adapter/releases/tag/v0.4.1-preview.1) includes a complete installation archive and a smaller audio-only upgrade. The full bundle now includes `prepare-metal.sh`: it obtains and verifies a pinned Apple compiler privately, without full Xcode. Apple tools, Microsoft DLLs and game-specific shaders are not redistributed. Long-session stability is not established. Source compilation is optional and documented separately in [Build](docs/build.md).
 
 ## Validation
 

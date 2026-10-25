@@ -34,29 +34,29 @@ Python 需要 **3.9 或更新版本**。预编译库不需要安装完整 Xcode�
   set -e
   mkdir -p "$HOME/Downloads/highball-detroit-setup"
   cd "$HOME/Downloads/highball-detroit-setup"
-  if [ -e highball-detroit-adapter-v0.4.0-preview.1 ]; then
+  if [ -e highball-detroit-adapter-v0.4.1-preview.1 ]; then
     echo "This version is already extracted; use the existing folder."
     exit 1
   fi
-  RELEASE="https://github.com/jason312928/highball-detroit-adapter/releases/download/v0.4.0-preview.1"
-  ASSET="highball-detroit-adapter-v0.4.0-preview.1-macos-x86_64.tar.gz"
+  RELEASE="https://github.com/jason312928/highball-detroit-adapter/releases/download/v0.4.1-preview.1"
+  ASSET="highball-detroit-adapter-v0.4.1-preview.1-macos-x86_64.tar.gz"
   curl --fail --location --output "$ASSET" "$RELEASE/$ASSET"
   curl --fail --location --output SHA256SUMS "$RELEASE/SHA256SUMS"
   awk -v asset="$ASSET" '$2 == asset { print; found=1 } END { if (!found) exit 1 }' \
     SHA256SUMS > selected.sha256
   shasum -a 256 -c selected.sha256
   tar -xzf "$ASSET"
-  cd highball-detroit-adapter-v0.4.0-preview.1
+  cd highball-detroit-adapter-v0.4.1-preview.1
   shasum -a 256 -c SHA256SUMS
 )
 ~~~
 
-所有校验项显示 `OK` 后继续。如果目录里已有 `highball-detroit-adapter-v0.4.0-preview.1`，命令会停止以免覆盖文件；使用之前下载好的目录即可。完整包已包含脚本和两种运行库，不必另下源码。
+所有校验项显示 `OK` 后继续。如果目录里已有 `highball-detroit-adapter-v0.4.1-preview.1`，命令会停止以免覆盖文件；使用之前下载好的目录即可。完整包已包含脚本和两种运行库，不必另下源码。
 
 接下来的步骤在**同一个终端窗口**执行，先进入脚本目录：
 
 ~~~bash
-cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-adapter-v0.4.0-preview.1"
+cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-adapter-v0.4.1-preview.1"
 ~~~
 
 包中的 `candidate.json` 是运行库的校验说明文件。后面的命令已填好它的位置，不用编辑它。
@@ -202,4 +202,10 @@ GAME_LOG="/这里粘贴启动日志路径"
 
 ## 运行中切换音频输出更新
 
-v0.4.0-preview.1 完成原有音频安装后，执行 `./audio/install-routing.sh --dry-run`、`./audio/install-routing.sh --apply`、`./audio/verify-routing.sh`。应用前关闭 Detroit 和独立 Steam；完整包已包含两个新路由 DLL，重开独立 Steam 后继承默认输出设置。参阅[音频切换说明](../../audio/routing/README.zh-CN.md)。真实 AirPods 切换及更新后游戏运行仍待验证；顶点输入缺失和剧情局部模糊仍未解决。
+v0.4.1-preview.1 完成原有音频安装后，执行 `./audio/install-routing.sh --dry-run`、`./audio/install-routing.sh --apply`、`./audio/verify-routing.sh`。应用前关闭 Detroit 和独立 Steam；完整包已包含两个新路由 DLL，重开独立 Steam 后继承默认输出设置。参阅[音频切换说明](../../audio/routing/README.zh-CN.md)。真实 AirPods 切换及更新后游戏运行仍待验证；顶点输入缺失和剧情局部模糊仍未解决。
+
+## 保存的设置与实际继承的设置
+
+安装或回滚前，除了游戏和独立 Steam，也需关闭 Highball；文件或 CLI 修改后，程序可能仍保留内存中的旧环境设置。完成后再打开 Highball。程序已打开时修改 HUD，应使用程序自己的 Graphics 开关，让界面内存状态同步更新。
+
+校验现会检查实际运行的独立客户端是否带有 `HB_DETROIT_AUDIO_FOLLOW_DEFAULT=1`。文件校验通过、设置已保存，并不证明之前启动的 Steam 继承了它。旧的独立 Steam 需退出再开。HUD 同样需要启动进程实际包含 `MTL_HUD_ENABLED=1`。
