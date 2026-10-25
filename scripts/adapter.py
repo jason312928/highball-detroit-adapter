@@ -405,7 +405,8 @@ def verify_installed(base):
         raise ValueError("Private dylib SHA-256 mismatch.")
     exe = b / "drive_c/DetroitSteamLibrary/steamapps/common/Detroit Become Human/DetroitBecomeHuman.exe"
     if sha(exe) != j["source_exe_sha256"]:
-        raise ValueError("Private game EXE changed; investigate before playing.")
+        from blur_workaround import verify_executable
+        log("EXE state: " + verify_executable(base, exe, j))
     settings = read(b / "bottle.json")
     if settings["engineID"] != ENGINE_NAME:
         raise ValueError("Private Bottle changed engines.")

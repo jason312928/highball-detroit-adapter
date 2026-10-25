@@ -1,5 +1,7 @@
 # Detroit: Become Human on Highball
 
+Optional: [background blur workaround](docs/background-blur.md), with version checks, full EXE backup and rollback. Explicit user choice is required; gameplay visuals remain unverified. Available in current source, not the v0.4.1 release archives.
+
 ## Audio output routing — v0.4.1-preview.1
 
 The new audio candidate follows the system default output during playback, rebuilds an invalidated WASAPI stream, and handles initialization failures without dereferencing failed COM results. It keeps the XAudio voice graph and mix format intact. It is installed only in the private Detroit engine and bottle.
