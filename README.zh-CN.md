@@ -1,5 +1,7 @@
 # 《底特律：变人》Highball 诊断工具
 
+**MetalFX 实测失败：最新候选在 Detroit 中出现黑屏和紫色边线，已撤回并恢复两份原库。原生及 Windows Vulkan 测试通过不足以证明游戏兼容；目前没有经游戏验证可用的 MetalFX 版本，源码保留供实验排查。**
+
 MetalFX 必须配套 Wine WSI 修补；此前只替换 MoltenVK 的实验版本已撤回。现已补充经过 Wine 的 Windows Vulkan 启动、超分、尺寸切换与关闭测试。
 
 实验功能：[MetalFX 空间超分](docs/zh-CN/metalfx-spatial.md) 作为单独构建的独立引擎版本提供。离屏呈现验证通过，游戏画面及帧数仍待实测。

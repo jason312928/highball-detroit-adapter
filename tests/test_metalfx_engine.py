@@ -134,6 +134,14 @@ class MetalFXEngineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             m.operate(self.base, "verify")
 
+    def test_withdrawn_candidate_cannot_be_reinstalled(self):
+        with mock.patch.object(m, "WITHDRAWN_SHA256", {m.adapter.sha(self.candidate)}):
+            with self.assertRaisesRegex(ValueError, "withdrawn"):
+                m.operate(self.base, "install", self.candidate, True, wsi_library=self.bridge)
+        self.assertFalse(self.directory.exists())
+        self.assertEqual(self.lib.read_bytes(), b"original-engine")
+        self.assertEqual(self.wsi.read_bytes(), b"original-wsi")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,7 @@
 # Experimental Detroit MetalFX spatial scaling
 
+**Withdrawn after real-game failure:** Detroit entered the new 1134×736 → 1512×982 path but showed a black screen / purple edge; only one frame encoding was logged. The exact cause remains unconfirmed. Both original libraries were restored. The following build/install notes are experimental development references, not a usable-game recommendation. The installer refuses the known failing candidate hash. Further work must cover real game render passes, texture content, extents, synchronization and presentation; the existing clear-color probes are insufficient.
+
 [简体中文](zh-CN/metalfx-spatial.md)
 
 The previous MoltenVK-only preview was incompatible with Wine WSI and is withdrawn. This corrected variant requires both MoltenVK and a matching private Wine WSI library.

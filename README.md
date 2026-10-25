@@ -1,5 +1,7 @@
 # Detroit: Become Human on Highball
 
+**MetalFX gameplay failure: the latest candidate produced a black screen with a purple edge in Detroit and has been withdrawn. Both private libraries were restored. Native and Windows Vulkan probes passed but did not establish game compatibility. There is currently no gameplay-validated MetalFX installation; the source remains experimental.**
+
 MetalFX requires the paired Wine WSI fix; the earlier MoltenVK-only preview is withdrawn. Windows Vulkan regression tests now cover bootstrap, scaling, resize and disable through Wine.
 
 Experimental: [MetalFX spatial scaling](docs/metalfx-spatial.md) is available as a separately built private-engine variant. Offscreen presentation validation passed; game visuals and FPS remain unverified.

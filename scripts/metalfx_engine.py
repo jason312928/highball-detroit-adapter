@@ -14,6 +14,8 @@ DEFAULT_MARKER = b"HB_DETROIT_METALFX_DEFAULT_ON_V1"
 WSI_MARKER = b"HB_DETROIT_METALFX_WSI_V1"
 HOST_BRIDGE_MARKER = b"hb_detroit_metalfx_surface_scaling_enabled"
 BASELINE_WSI_SHA256 = "ae95ed75ffad3267c413d28fbcd46a360fe26c3de60fdd6ffeeff3510b891ab6"
+# Real Detroit run: black screen / purple edge after the first encoded frame.
+WITHDRAWN_SHA256 = {"b8dfd15884175074929109c610ccf75e78203cddafea3fd7ffd9dc677cba1572"}
 
 
 def wsi_path(base):
@@ -130,6 +132,8 @@ def operate(base, action, library=None, apply=False, wsi_library=None):
         if WSI_MARKER not in source_bridge.read_bytes():
             raise ValueError("Wine WSI candidate marker is missing.")
         target_hash = adapter.sha(source)
+        if target_hash in WITHDRAWN_SHA256:
+            raise ValueError("This MetalFX candidate was withdrawn after a real-game black screen / purple-edge failure. Original engine remains installed.")
         bridge_target = adapter.sha(source_bridge)
         if current != j["candidate_sha256"]:
             verify_library(base, lib, j)
