@@ -13,7 +13,7 @@
 
 ## 现在怎样启动
 
-完整 Release 包已将此目录放在 `audio/` 下。若已经安装独立环境，只需在 [Release](https://github.com/jason312928/highball-detroit-adapter/releases/tag/v0.2.0-preview.1) 下载 `highball-detroit-audiofix-v0.2.0-preview.1-macos-x86_64.tar.gz` 和 `SHA256SUMS`，核对清单中对应的 SHA-256 后解压。在终端进入解压后的 `highball-detroit-audiofix-v0.2.0-preview.1` 文件夹。包内带有 DLL，Git 源码目录不含二进制。
+完整 Release 包已将此目录放在 `audio/` 下。若已经安装独立环境，只需在 [Release](https://github.com/jason312928/highball-detroit-adapter/releases/tag/v0.3.0-preview.1) 下载 `highball-detroit-audiofix-v0.3.0-preview.1-macos-x86_64.tar.gz` 和 `SHA256SUMS`，核对清单中对应的 SHA-256 后解压。在终端进入解压后的 `highball-detroit-audiofix-v0.3.0-preview.1` 文件夹。包内带有 DLL，Git 源码目录不含二进制。
 
 只下载音频升级包时，可直接复制以下整块命令到终端。若已经解压过此版本，命令会停止，直接使用已有目录即可。
 
@@ -22,16 +22,16 @@
   set -e
   mkdir -p "$HOME/Downloads/highball-detroit-setup"
   cd "$HOME/Downloads/highball-detroit-setup"
-  test ! -e highball-detroit-audiofix-v0.2.0-preview.1
-  RELEASE="https://github.com/jason312928/highball-detroit-adapter/releases/download/v0.2.0-preview.1"
-  ASSET="highball-detroit-audiofix-v0.2.0-preview.1-macos-x86_64.tar.gz"
+  test ! -e highball-detroit-audiofix-v0.3.0-preview.1
+  RELEASE="https://github.com/jason312928/highball-detroit-adapter/releases/download/v0.3.0-preview.1"
+  ASSET="highball-detroit-audiofix-v0.3.0-preview.1-macos-x86_64.tar.gz"
   curl --fail --location --output "$ASSET" "$RELEASE/$ASSET"
   curl --fail --location --output SHA256SUMS "$RELEASE/SHA256SUMS"
   awk -v asset="$ASSET" '$2 == asset { print; found=1 } END { if (!found) exit 1 }' \
     SHA256SUMS > selected.sha256
   shasum -a 256 -c selected.sha256
   tar -xzf "$ASSET"
-  cd highball-detroit-audiofix-v0.2.0-preview.1
+  cd highball-detroit-audiofix-v0.3.0-preview.1
   shasum -a 256 -c SHA256SUMS
 )
 ```
@@ -39,7 +39,7 @@
 然后进入音频目录；使用完整包时则进入其中的 `audio/`：
 
 ```bash
-cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-audiofix-v0.2.0-preview.1"
+cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-audiofix-v0.3.0-preview.1"
 ```
 
 在相同引擎基线上另行安装时，先退出游戏和独立环境的 Windows Steam / Wine 程序，再执行：
@@ -54,7 +54,7 @@ cd "$HOME/Downloads/highball-detroit-setup/highball-detroit-audiofix-v0.2.0-prev
 
 只替换独立引擎与独立 Bottle 的两份 `xaudio2_8.dll`。共享引擎、原 Games 环境、EXE、存档、系统音频路由和设备权限不改动。HDR 对比属于单独的图形排查，本音频补丁不改图形配置。
 
-安装后打开 Highball → **Detroit Isolated** → **Detroit (isolated Steam)** 启动。通过 98% 并进入场景的实测发生在音频修补前，修补后的完整游戏回归仍待验证。
+安装后使用 Highball 正常的 **Detroit: Become Human** 页面；必要时在 **Game settings** 里点击 `Detroit Isolated` 旁的 **Play there**，以后主 **Play** 按钮会记住环境。还需按 [完整教程](../docs/zh-CN/usage.md) 生成持久 Metal 缓存。音频修复和缓存准备后的普通游玩反馈正常，设备重连及长时间压力测试仍未验收。
 
 ## 恢复原音频库
 

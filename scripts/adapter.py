@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import uuid
@@ -21,6 +22,26 @@ OWNER = ".detroit-adapter-owner.json"
 ENGINE_NAME = "detroit-strict-003-r28"
 BOTTLE_NAME = "Detroit Isolated"
 APPID = "1222140"
+RUNTIME_DLLS = ("msvcp140.dll", "mfc140.dll", "vcruntime140.dll")
+
+def check_runtime(game, bottle):
+    """Check the game's required VC runtime before cloning; never distribute it."""
+    for name in RUNTIME_DLLS:
+        paths = [game / name, bottle / "drive_c/windows/system32" / name]
+        dll = next((p for p in paths if p.is_file()), None)
+        if dll is None:
+            raise ValueError(f"Missing x64 Visual C++ runtime: {name}. Install the Microsoft x64 VC runtime in the source environment, then retry.")
+        regular(dll)
+        with dll.open("rb") as f:
+            header = f.read(64)
+            if len(header) < 64 or header[:2] != b"MZ":
+                raise ValueError(f"Invalid PE runtime: {name}")
+            offset = struct.unpack_from("<I", header, 60)[0]
+            if offset > 1024 * 1024:
+                raise ValueError(f"Invalid PE runtime offset: {name}")
+            f.seek(offset)
+            if f.read(6) != b"PE\0\0\x64\x86":
+                raise ValueError(f"Expected x86_64 Visual C++ runtime: {name}")
 
 def default_highball_root():
     default = Path.home() / "Library/Application Support/Highball"
@@ -221,6 +242,7 @@ def plan(a):
         raise ValueError("Specify --game-dir; no machine-specific path is stored in this source distribution.")
     game = a.game_dir.expanduser().resolve()
     regular(game / "DetroitBecomeHuman.exe")
+    check_runtime(game, source_bottle)
     # Require a Steam installation so the private Steam library can be registered correctly.
     appmanifest = game.parent.parent / f"appmanifest_{APPID}.acf"
     regular(appmanifest)
@@ -272,8 +294,8 @@ def install(a):
                         total += p.stat().st_size
         free = shutil.disk_usage(base).free
         log(f"Conservative copy space: {total} bytes; free: {free} bytes.")
-        if free < total + 5 * 1024**3:
-            raise ValueError("Insufficient space for independent copies plus 5 GiB cache reserve.")
+        if free < total + 12 * 1024**3:
+            raise ValueError("Insufficient space for independent copies plus 12 GiB tool/cache reserve.")
         token = uuid.uuid4().hex
         stage = state / ("stage-" + token)
         stage.mkdir()

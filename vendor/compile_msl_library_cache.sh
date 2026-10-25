@@ -149,7 +149,10 @@ elif [ "$prune_unselected_metallibs" = "1" ] || [ "$prune_unselected_sources" = 
 	die "prune options require --slow-log"
 fi
 
-if ! metal_tool="$(xcrun -sdk macosx -find metal 2>/dev/null)"; then
+if [ -n "${METAL_TOOL:-}" ]; then
+	[ -f "$METAL_TOOL" ] && [ -x "$METAL_TOOL" ] || die "METAL_TOOL must name an executable file"
+	metal_tool="$METAL_TOOL"
+elif ! metal_tool="$(xcrun -sdk macosx -find metal 2>/dev/null)"; then
 	die "Metal Toolchain unavailable; run: xcodebuild -downloadComponent MetalToolchain"
 fi
 

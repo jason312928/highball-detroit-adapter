@@ -18,17 +18,22 @@ The Release003 distribution reports a dirty MoltenVK source tree. Its tag alone 
 | Game-process load | Independent EXE and dylib paths confirmed by dyld/lsof; architecture confirmed by sampling |
 | Initial shader compilation past the former 98% stop | Passed in the reviewed interactive run; game proceeded to menu and scene |
 | Main menu | Reached; menu clicking worked in the interactive test |
-| Gameplay scene | Entered; full interaction and scene correctness are not accepted |
-| Visual correctness | Highlight clipping observed; SDR comparison prepared, result pending |
-| Scene mouse input | Interaction issue observed; gesture instructions supplied, resolution unverified |
+| Gameplay scene | Entered; latest ordinary gameplay reported normal; every-scene coverage not recorded |
+| Visual correctness | Earlier clipping report retained as history; latest ordinary play reported normal, controlled same-scene comparison not recorded |
+| Scene mouse input | Earlier interaction report retained as history; latest ordinary play reported normal, individual gesture coverage not recorded |
 | Audio crash diagnosis | Dump, registers and disassembly identify a failed mix-format query followed by a null dereference in FAudio; Wine also ignored voice-creation failure |
 | Audio failure-path tests | Pre-patch failures reproduced; patched device-query and wrapper cases passed |
 | Installed audio DLL | x86_64 load, mastering-voice creation and silent-buffer consumption passed |
-| Gameplay after audio fix / device reconnection | Not yet tested |
+| Gameplay after audio fix | Latest ordinary play reported normal after cache preparation |
+| Physical audio-device reconnection | Not yet tested |
 | Long-session stability | Open; a pre-fix run ended with access violation |
-| Offline Metal cache | Not exercised; metal compiler unavailable |
+| Offline Metal cache | 28,635 built and accepted by Metal; repeat built 0 / skipped 28,635 |
+| Private compiler preparation | Pinned Apple 17A324 archive/hash/signature, separate-layout installation, reuse and archive rollback passed |
+| Normal Highball Play | UI and persisted environment select Detroit Isolated; command launcher unnecessary |
 
-These are local engineering observations, not a cross-platform compatibility claim. Machine snapshots and original logs are not published. Build success and library-load evidence are recorded separately from game-level acceptance. The later interactive run establishes progress beyond 98%, menu access and scene entry. It also exposed visual/input defects and an audio access violation. Those startup observations predate the audio fix; they do not establish post-fix gameplay or long-session stability. No success is inferred from an empty error scan.
+These checks combine engineering probes with an explicitly identified user report. The latest report confirms ordinary play without the previous repeated long startup compilation. It does not supply duration, complete scene/input coverage or a physical audio-device reconnection test. An absence of error lines alone is not treated as game success. Earlier visual/input and audio-crash observations are retained as history; the current workflow does not patch the game EXE or disable depth of field.
+
+The [reproduction audit](reproduction.md) maps each working component to a published step. A separate empty layout exercised actual Apple archive extraction, code-signature/hash validation and private compiler installation. This is not a factory-reset Mac or a second full game installation. Cross-device compatibility and long-session stability remain open.
 
 The [audio documentation](../audio/README.md) separates source-level failure-injection tests from actual DLL/audio probes. Original logs, dumps, screenshots, device identifiers and machine records remain private.
 
@@ -40,7 +45,7 @@ make test
 HIGHBALL_TEST_CLI="/path/to/highball" make test
 ~~~
 
-Tests require macOS clang/lipo and use temporary synthetic fixtures. They do not launch Wine or the game. Without HIGHBALL_TEST_CLI, the optional CLI decoding test is skipped. Coverage includes hash/architecture rejection, paths with spaces, transaction recovery, repeat installation and rollback.
+Tests require macOS clang/lipo and use temporary synthetic fixtures. They do not launch Wine or the game. Without HIGHBALL_TEST_CLI, the optional CLI decoding test is skipped. The reviewed run passed 35 tests, including the optional CLI check. Coverage includes hash/architecture/runtime rejection, paths with spaces, transaction recovery, repeat installation, cache math/invariance options, failed-cache preservation and toolchain rollback.
 
 ## Minimal Metal reproduction
 

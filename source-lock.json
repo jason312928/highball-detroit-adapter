@@ -56,5 +56,24 @@
       "work/vulkan-headers.tar.gz": "35824117f649befc664a12622bc801eddbba036ac03d906db400ee1c1e7903e9",
       "work/CPM_0.40.8.cmake": "78ba32abdf798bc616bab7c73aac32a17bbd7b06ad9e26a6add69de8f3ae4791"
     }
+  },
+  "visual_cpp_runtime_reference": {
+    "required_arch": "x86_64",
+    "files": {
+      "msvcp140.dll": {
+        "version": "14.51.36247.0",
+        "sha256": "7c26614e1d733892c2deac7e245ce115504b1d80592dd0a01b08e3e5a55f89ca"
+      },
+      "mfc140.dll": {
+        "version": "14.51.36247.0",
+        "sha256": "b784303d86232a1b316c79839aa78bf631b4fc182e55d9d947688adb066dff26"
+      },
+      "vcruntime140.dll": {
+        "version": "14.51.36247.0",
+        "sha256": "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7"
+      }
+    },
+    "policy": "Prerequisite only; Microsoft DLLs are not redistributed. Preflight checks presence and PE architecture, not exact DLL hashes.",
+    "vendor_documentation": "https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170"
   }
 }

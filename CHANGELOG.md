@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.0-preview.1
+
+- Use Highball’s normal game page and remembered environment choice; a command launcher is unnecessary.
+- Accept an explicit Apple Metal compiler path for offline cache generation without changing the global Xcode selection.
+- Limit cache-build process checks to the isolated engine, preserving other environments.
+- Add cache compiler regression tests and a native Metal library-load probe.
+
 [简体中文](CHANGELOG.zh-CN.md)
 
 ## v0.2.0-preview.1

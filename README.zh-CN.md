@@ -12,7 +12,7 @@
 Vertex attribute in_vfMsBindPosePosition(12) is missing from the vertex descriptor.
 ~~~
 
-**状态：预览版。画面与场景输入问题仍待解决。新增音频修复已通过故障注入和真实音频测试；修补后的完整游戏回归及长时间稳定性仍待验证。**
+**状态：预发布。加入音频修复和持久 Metal 缓存后的最新运行反馈为正常游玩，不再每次启动都进行长时间编译。长时间稳定性、所有场景正确性和音频设备重连仍未完成专项验收。**
 
 ## 补丁范围
 
@@ -22,17 +22,21 @@ Vertex attribute in_vfMsBindPosePosition(12) is missing from the vertex descript
 
 ## 从这里开始
 
-**已经安装过？** 打开 Highball → **Detroit Isolated** → **Detroit (isolated Steam)**。补装新音频修复时，按 [音频升级说明](audio/README.zh-CN.md) 操作。
+**已经安装过？** 打开 Highball → **Detroit: Become Human** → **Game settings**，在 **Detroit Isolated** 旁点击一次 **Play there**。Highball 会记住选择，以后直接使用主页面的 **Play**。补装新音频修复时，按 [音频升级说明](audio/README.zh-CN.md) 操作。
 
 **第一次安装？** 按 [一步一步的安装教程](docs/zh-CN/usage.md) 操作。里面提供下载命令，说明怎样找到环境名称和游戏文件夹，以及如何预检、安装、启动和恢复。使用下载包无需编译 MoltenVK 或安装完整 Xcode。
 
-已审查组合为 Highball 0.10.22、x64-crossover26.3-r28 引擎及 Steam Windows 版游戏。安装会复制原环境、引擎和游戏，需为三者及至少 5 GiB 余量准备空间，通常超过 64 GiB。原游戏和共享引擎保留，回滚将测试环境的存档留在归档中。
+已审查组合为 Highball 0.10.22、x64-crossover26.3-r28 引擎及 Steam Windows 版游戏。安装会复制原环境、引擎和游戏，需为三者及至少 12 GiB 余量准备空间，通常超过 75 GiB。原游戏和共享引擎保留，回滚将测试环境的存档留在归档中。
 
-[v0.2.0-preview.1 Release](https://github.com/jason312928/highball-detroit-adapter/releases/tag/v0.2.0-preview.1) 提供完整安装包和较小的音频升级包，日常游玩的稳定性尚未验收。自己编译源码属于可选步骤，单独见 [构建说明](docs/zh-CN/build.md)。
+[v0.3.0-preview.1 Release](https://github.com/jason312928/highball-detroit-adapter/releases/tag/v0.3.0-preview.1) 提供完整安装包和较小的音频升级包，日常游玩的稳定性尚未验收。自己编译源码属于可选步骤，单独见 [构建说明](docs/zh-CN/build.md)。
 
 ## 验证
 
-已实测越过首次着色器编译的 98% 阶段，进入菜单及场景；也验证了库构建、加载、事务安装和新增音频错误路径。画面正确性、场景输入、游戏中音频设备重连和长时间稳定性仍待验证，证据边界及待办见 [验证记录](docs/zh-CN/validation.md) 与 [顶点输入分析](docs/zh-CN/vertex-input.md)。
+首次编译已越过 98%，并进入菜单和场景。持久缓存构建生成 28,635 份 Metal 二进制，全部加载通过；复跑新增 0 份。后续普通游玩反馈正常，不再反复长时间编译。文件探针、编译器复用与游玩反馈分别记录，详见 [验证记录](docs/zh-CN/validation.md) 和 [复现审查](docs/zh-CN/reproduction.md)。
+
+正常入口为 **Highball → Detroit: Become Human → Play**，使用记住的 `Detroit Isolated` 环境。首次设置需先完成游戏自己的编译，再生成离线 Metal 缓存；漏掉后一步仍可能每次慢启动。不要求 `.command`、修改游戏 EXE 或关闭景深。
+
+完整包包含 `prepare-metal.sh`，从 Apple 获取并验证固定版本的独立编译器，不需要完整 Xcode。本项目不分发 Apple 工具、Microsoft DLL 或游戏着色器。
 
 ## 开发
 

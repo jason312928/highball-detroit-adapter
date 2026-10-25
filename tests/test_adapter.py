@@ -10,6 +10,7 @@ import shutil
 import sys
 from pathlib import Path
 import subprocess
+import struct
 import tempfile
 import unittest
 from unittest import mock
@@ -39,6 +40,12 @@ class AdapterTests(unittest.TestCase):
         (self.engine / "frameworks/libMoltenVK.dylib").write_bytes(self.lib.read_bytes())
         (self.bottle / "drive_c/Program Files (x86)/Steam/steam.exe").write_bytes(b"synthetic-not-a-game")
         (self.game / "DetroitBecomeHuman.exe").write_bytes(b"synthetic-exe")
+        runtime = bytearray(128)
+        runtime[:2] = b"MZ"
+        struct.pack_into("<I", runtime, 60, 64)
+        runtime[64:70] = b"PE\0\0\x64\x86"
+        for name in m.RUNTIME_DLLS:
+            (self.game / name).write_bytes(runtime)
         (self.game / "ShaderCache/CorruptedCache").touch()
         (self.game.parent.parent / "appmanifest_1222140.acf").write_text('"appid" "1222140"')
         (self.bottle / "drive_c/users/test/Documents").symlink_to(self.root)
@@ -76,6 +83,17 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(m.install(self.a), 0)
         self.assertFalse((self.base / ".detroit-adapter").exists())
         self.assertTrue(all(not p.exists() for p in m.targets(self.base)))
+
+    def test_missing_runtime_refused_before_installation(self):
+        dll = self.game / "mfc140.dll"
+        content = dll.read_bytes()
+        dll.unlink()
+        try:
+            with self.assertRaisesRegex(ValueError, "Missing x64 Visual C"):
+                m.install(self.a)
+            self.assertFalse((self.base / ".detroit-adapter").exists())
+        finally:
+            dll.write_bytes(content)
 
     def test_engine_inspection_writes_only_local_hashes(self):
         inspected = self.root / "inspection space"

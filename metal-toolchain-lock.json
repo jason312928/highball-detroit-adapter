@@ -1,0 +1,12 @@
+{
+  "build": "17A324",
+  "url": "https://updates.cdn-apple.com/2025FallFCS/mobileassets/022-20595/9C0082D1-1785-4BCE-AE0A-2D2F1EAF1FCA/com_apple_MobileAsset_MetalToolchain/5086A649-A833-4640-BB20-E079923FF0F4.aar",
+  "sha256": "7ca1a20772f4926eabbce8ae4cba0d766f035ad43621e51a44eaf618fe1ce8f7",
+  "sha1": "48dfa821479ad41be67d5dc61f65bf14d84f308e",
+  "bytes": 704643072,
+  "public_asset_decryption_key": "K4y/SCUkO6dNYhX8K4Qp7rQ0c1oSFpcMvEif7SYTYG0=",
+  "compiler_sha256": "83a8bdf4fa21193f7596de70f21ad637f80048a6fbe6a345ba7d93076f3a345a",
+  "compiler_version": "32023.830",
+  "source": "Apple MobileAsset MetalToolchain catalog; asset key is public distribution metadata, not an account credential",
+  "distribution": "Download from Apple only. Apple toolchain binaries are not redistributed in this project."
+}

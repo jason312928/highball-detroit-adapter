@@ -1,5 +1,12 @@
 # 更新记录
 
+## v0.3.0-preview.1
+
+- 使用 Highball 正常游戏页面及其记住的环境选择，无需 command 启动器。
+- 离线缓存脚本可显式指定 Apple Metal 编译器，无需更改全局 Xcode 选择。
+- 缓存构建的进程检查限于独立引擎，其他环境可继续运行。
+- 增加缓存编译回归测试及原生 Metal 二进制加载探针。
+
 [English](CHANGELOG.md)
 
 ## v0.2.0-preview.1

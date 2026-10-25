@@ -12,7 +12,7 @@ The original startup failure included this Metal vertex-input error:
 Vertex attribute in_vfMsBindPosePosition(12) is missing from the vertex descriptor.
 ~~~
 
-**Status: preview. Visual and scene-input issues remain open. The new audio fix has passed failure-injection and runtime audio tests; gameplay after that fix and long-session stability still require validation.**
+**Status: preview. The latest run with the audio fix and persistent Metal cache was reported to play normally, without repeating the long shader compilation on every launch. Long-session stability, all-scene correctness and audio-device reconnection remain unverified.**
 
 ## Patch scope
 
@@ -22,17 +22,20 @@ The [XAudio2 fix](audio/README.md) handles failed audio-device queries and propa
 
 ## Start here
 
-**Already installed?** Open Highball → **Detroit Isolated** → **Detroit (isolated Steam)**. To add the new audio fix, follow the [audio upgrade instructions](audio/README.md).
+**Already installed?** Open Highball → **Detroit: Become Human** → **Game settings**. Select **Play there** beside **Detroit Isolated** once; Highball remembers it, and subsequent launches use the normal **Play** button. To add the new audio fix, follow the [audio upgrade instructions](audio/README.md).
 
 **First installation?** Follow the [step-by-step installation guide](docs/usage.md). It includes download commands, how to find your environment name and game folder, checks before installation, launch instructions and rollback. The prebuilt library does not require compiling MoltenVK or installing full Xcode.
 
-The reviewed baseline is Highball 0.10.22 with x64-crossover26.3-r28 and the Windows Steam edition of the game. Installation copies the source environment, engine and game; allow space for all three plus at least 5 GiB spare, typically more than 64 GiB. Original game files and the shared engine are preserved. Rollback retains the test environment's saves in an archive.
+The reviewed baseline is Highball 0.10.22 with x64-crossover26.3-r28 and the Windows Steam edition of the game. Installation copies the source environment, engine and game; allow space for all three plus at least 12 GiB spare, often more than 75 GiB. Original game files and the shared engine are preserved. Rollback retains the test environment's saves in an archive.
 
-The [v0.2.0-preview.1 release](https://github.com/jason312928/highball-detroit-adapter/releases/tag/v0.2.0-preview.1) includes a complete installation archive and a smaller audio-only upgrade. Daily gameplay stability is not established. Source compilation is optional and documented separately in [Build](docs/build.md).
+The [v0.3.0-preview.1 release](https://github.com/jason312928/highball-detroit-adapter/releases/tag/v0.3.0-preview.1) includes a complete installation archive and a smaller audio-only upgrade. The full bundle now includes `prepare-metal.sh`: it obtains and verifies a pinned Apple compiler privately, without full Xcode. Apple tools, Microsoft DLLs and game-specific shaders are not redistributed. Long-session stability is not established. Source compilation is optional and documented separately in [Build](docs/build.md).
 
 ## Validation
 
-Initial shader compilation has progressed past 98%, and an interactive run reached the menu and a scene. Library compilation, loading, transactional installation and the new audio failure paths have also been tested. Visual correctness, scene input, audio-device reconnection during gameplay and long-session stability remain open. The distinction and remaining work are documented in [Validation](docs/validation.md) and [Vertex input](docs/vertex-input.md).
+Initial compilation has progressed past 98%, with menu and scene entry. The persistent-cache build produced 28,635 Metal libraries; all loaded successfully, and a repeat compiler run built zero. Subsequent ordinary play was reported normal without repeated long startup compilation. File probes, compiler reuse and a user-reported game result are recorded separately in [Validation](docs/validation.md). See the [reproduction audit](docs/reproduction.md) for the exact flow, dependencies and remaining limits.
+
+The normal route is **Highball → Detroit: Become Human → Play**, using the remembered `Detroit Isolated` environment. First-time setup must complete the game’s own shader pass **and then** the offline Metal cache step; skipping the latter reproduces slow repeat startups. No `.command` launcher, game-EXE patch or depth-of-field change is required.
+
 
 ## Development
 

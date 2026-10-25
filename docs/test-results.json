@@ -1,5 +1,5 @@
 {
-  "release": "v0.2.0-preview.1",
+  "release": "v0.3.0-preview.1",
   "software_baseline": {
     "highball": "0.10.22",
     "engine": "x64-crossover26.3-r28",
@@ -20,14 +20,40 @@
     "patched_device_query_cases": "passed",
     "patched_mastering_voice_cases": "passed",
     "actual_dll_load_and_silent_buffer_consumption": "passed",
-    "gameplay_after_fix": "not_yet_validated",
+    "gameplay_after_fix": "normal_ordinary_play_reported",
     "physical_device_reconnection": "not_yet_validated"
   },
   "installer_regression_tests": {
-    "adapter": 19,
+    "adapter": 20,
     "audio": 7,
-    "result": "26_passed"
+    "cache_compiler": 3,
+    "toolchain_preparation": 5,
+    "result": "35_passed"
   },
   "daily_gameplay_acceptance": "not_completed",
-  "privacy": "Only aggregate results are published. No runtime logs, dumps, shaders, screenshots, game files, device identifiers or machine snapshots are included."
+  "privacy": "Only aggregate results are published. No runtime logs, dumps, shaders, screenshots, game files, device identifiers or machine snapshots are included.",
+  "latest_interactive_report": {
+    "source": "user-reported ordinary gameplay after audio fix and persistent cache preparation",
+    "result": "normal_play_reported",
+    "repeated_long_shader_compilation": "not_observed",
+    "cross_machine_reproduction": "not_tested",
+    "duration_and_scene_coverage": "not_recorded"
+  },
+  "offline_metal_cache": {
+    "toolchain_build": "17A324",
+    "source_count": 28635,
+    "compiled_libraries": 28635,
+    "native_library_load_accepted": 28635,
+    "native_library_load_rejected": 0,
+    "repeat_built": 0,
+    "repeat_skipped": 28635,
+    "result": "passed",
+    "new_shaders_may_compile": true
+  },
+  "reproduction_checks": {
+    "toolchain_install_in_separate_empty_layout": "passed_with_pinned_local_archive",
+    "toolchain_signature_and_hashes": "passed",
+    "toolchain_repeat_and_archive_rollback": "passed",
+    "fresh_mac_full_game_install": "not_performed"
+  }
 }

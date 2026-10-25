@@ -23,6 +23,8 @@
     "file": "xaudio2_8.dll",
     "arch": "x86_64 PE32+",
     "sha256": "a19d4e199aaf70bb2990a51bf6fda9c4466612c9e2306365ff29f7d8983fd2cb",
-    "gameplay_validated": false
+    "gameplay_validated": false,
+    "ordinary_gameplay_reported": true,
+    "validation_note": "Ordinary post-fix play reported normal. Full scene coverage, physical endpoint reconnection and long-session acceptance are not completed."
   }
 }
