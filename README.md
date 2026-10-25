@@ -1,5 +1,7 @@
 # Detroit: Become Human on Highball
 
+MetalFX requires the paired Wine WSI fix; the earlier MoltenVK-only preview is withdrawn. Windows Vulkan regression tests now cover bootstrap, scaling, resize and disable through Wine.
+
 Experimental: [MetalFX spatial scaling](docs/metalfx-spatial.md) is available as a separately built private-engine variant. Offscreen presentation validation passed; game visuals and FPS remain unverified.
 
 Optional: [background blur workaround](docs/background-blur.md), with version checks, full EXE backup and rollback. Explicit user choice is required; gameplay visuals remain unverified. Available in current source, not the v0.4.1 release archives.

@@ -73,17 +73,18 @@ int main(int argc, const char **argv) {
     id<MTLCommandQueue> queue=eq.mtlCommandQueue; REQUIRE(queue); id<MTLDevice> device=queue.device;
 
     ProbeLayer *layer=[ProbeLayer layer];layer.device=device;layer.pixelFormat=MTLPixelFormatBGRA8Unorm;
-    layer.bounds=CGRectMake(0,0,1512,982);layer.contentsScale=1;layer.drawableSize=CGSizeMake(1512,982);layer.framebufferOnly=NO;
+    layer.bounds=CGRectMake(0,0,1024,576);layer.contentsScale=1;layer.drawableSize=CGSizeMake(1024,576);layer.framebufferOnly=NO;
     VkMetalSurfaceCreateInfoEXT sci={.sType=VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT,.pLayer=layer};VkSurfaceKHR surface;CHECK(CreateMetalSurfaceEXT(inst,&sci,NULL,&surface));
     VkSwapchainKHR previous=VK_NULL_HANDLE;
-    for(int phase=0;phase<2;phase++){
-    if(phase){layer.bounds=CGRectMake(0,0,1280,800);}
-    uint32_t displayW=phase?1280:1512,displayH=phase?800:982;
+    for(int phase=0;phase<3;phase++){
+    uint32_t displayW=phase==0?1024:(phase==1?1512:1280),displayH=phase==0?576:(phase==1?982:800);
+    layer.bounds=CGRectMake(0,0,displayW,displayH);
     VkSurfaceCapabilitiesKHR caps;CHECK(GetPhysicalDeviceSurfaceCapabilitiesKHR(pd,surface,&caps));
     printf("initial_surface=%ux%u\n",caps.currentExtent.width,caps.currentExtent.height);fflush(stdout);
     BOOL enabled = !(getenv("MVK_DTR_METALFX_SPATIAL") && !strcmp(getenv("MVK_DTR_METALFX_SPATIAL"),"0"));
-    REQUIRE(caps.currentExtent.width==(enabled?(uint32_t)(floor(displayW*.75/2)*2):displayW) && caps.currentExtent.height==(enabled?(uint32_t)(floor(displayH*.75/2)*2):displayH));
+    REQUIRE(caps.currentExtent.width==(enabled&&phase?(uint32_t)(floor(displayW*.75/2)*2):displayW) && caps.currentExtent.height==(enabled&&phase?(uint32_t)(floor(displayH*.75/2)*2):displayH));
     VkSwapchainCreateInfoKHR sc={.sType=VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,.surface=surface,.minImageCount=3,.imageFormat=VK_FORMAT_B8G8R8A8_UNORM,.imageColorSpace=VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,.imageExtent=caps.currentExtent,.imageArrayLayers=1,.imageUsage=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,.imageSharingMode=VK_SHARING_MODE_EXCLUSIVE,.preTransform=VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,.compositeAlpha=VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,.presentMode=VK_PRESENT_MODE_FIFO_KHR,.clipped=VK_TRUE};
+    if(phase==0)sc.imageExtent=(VkExtent2D){1024,576}; /* Reproduce Detroit fixed bootstrap request. */
     sc.oldSwapchain=previous;
     VkSwapchainKHR swap;CHECK(CreateSwapchainKHR(dev,&sc,NULL,&swap));
     if(previous)DestroySwapchainKHR(dev,previous,NULL);
@@ -91,7 +92,7 @@ int main(int argc, const char **argv) {
     VkExportMetalTextureInfoEXT et={.sType=VK_STRUCTURE_TYPE_EXPORT_METAL_TEXTURE_INFO_EXT,.image=images[0],.plane=VK_IMAGE_ASPECT_COLOR_BIT};eo.pNext=&et;ExportMetalObjectsEXT(dev,&eo);
     REQUIRE(et.mtlTexture.width==sc.imageExtent.width && et.mtlTexture.height==sc.imageExtent.height);
     REQUIRE(layer.drawableSize.width==displayW && layer.drawableSize.height==displayH);
-    CHECK(GetPhysicalDeviceSurfaceCapabilitiesKHR(pd,surface,&caps));REQUIRE(caps.currentExtent.width==sc.imageExtent.width && caps.currentExtent.height==sc.imageExtent.height);
+    CHECK(GetPhysicalDeviceSurfaceCapabilitiesKHR(pd,surface,&caps));REQUIRE(caps.currentExtent.width==(enabled&&phase?(uint32_t)(floor(displayW*.75/2)*2):displayW) && caps.currentExtent.height==(enabled&&phase?(uint32_t)(floor(displayH*.75/2)*2):displayH));
     VkCommandPoolCreateInfo pci={.sType=VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,.queueFamilyIndex=qi};VkCommandPool pool;CHECK(CreateCommandPool(dev,&pci,NULL,&pool));
     VkCommandBufferAllocateInfo cai={.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,.commandPool=pool,.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY,.commandBufferCount=1};VkCommandBuffer cb;CHECK(AllocateCommandBuffers(dev,&cai,&cb));
     VkFenceCreateInfo fci={.sType=VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};VkFence fence;CHECK(CreateFence(dev,&fci,NULL,&fence));
@@ -113,7 +114,7 @@ int main(int argc, const char **argv) {
       unsigned char *pixel=(unsigned char *)buf.contents+(displayH/2)*rb+(displayW/2)*4;
       REQUIRE(abs(pixel[0]-191)<=3 && abs(pixel[1]-64)<=3 && abs(pixel[2]-128)<=3 && pixel[3]>=250);[buf release];
     }
-    printf("swapchain_frames=12 input=%ux%u display=%.0fx%.0f metalfx=%s\n",sc.imageExtent.width,sc.imageExtent.height,layer.drawableSize.width,layer.drawableSize.height,enabled?"on":"off");
+    printf("swapchain_frames=12 input=%ux%u display=%.0fx%.0f metalfx=%s\n",sc.imageExtent.width,sc.imageExtent.height,layer.drawableSize.width,layer.drawableSize.height,enabled?(phase==0?"passthrough":"on"):"off");
     DestroyFence(dev,fence,NULL);DestroyCommandPool(dev,pool,NULL);free(images);previous=swap;
     }
     layer.lastDrawable=nil;DestroySwapchainKHR(dev,previous,NULL);DestroySurfaceKHR(inst,surface,NULL);DestroyDevice(dev,NULL);DestroyInstance(inst,NULL);dlclose(lib);return 0;

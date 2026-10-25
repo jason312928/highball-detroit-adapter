@@ -1,0 +1,92 @@
+--- a/dlls/win32u/vulkan.c
++++ b/dlls/win32u/vulkan.c
+@@ -26,6 +26,7 @@
+ 
+ #include <dlfcn.h>
+ #include <pthread.h>
++#include <stdio.h>
+ #include <unistd.h>
+ 
+ #include "ntstatus.h"
+@@ -1579,6 +1580,34 @@
+     return TRUE;
+ }
+ 
++/* HB_DETROIT_METALFX_WSI_V1: activate only when the loaded private host exposes the real scaler. */
++static BOOL extents_equals(const VkExtent2D *extents, const RECT *rect);
++static unsigned int (*detroit_metalfx_host_enabled)(void);
++static pthread_once_t detroit_metalfx_once = PTHREAD_ONCE_INIT;
++
++static void detroit_metalfx_init(void)
++{
++    detroit_metalfx_host_enabled = dlsym(vulkan_handle, "hb_detroit_metalfx_surface_scaling_enabled");
++}
++
++static BOOL detroit_metalfx_enabled(void)
++{
++    pthread_once(&detroit_metalfx_once, detroit_metalfx_init);
++    return detroit_metalfx_host_enabled && detroit_metalfx_host_enabled();
++}
++
++static BOOL detroit_extents_match(struct vulkan_physical_device *physical_device,
++                                  struct surface *surface, const VkExtent2D *extent, const RECT *rect)
++{
++    VkSurfaceCapabilitiesKHR caps;
++    struct vulkan_instance *instance = physical_device->instance;
++    if (extents_equals(extent, rect)) return TRUE; /* Fixed-size startup/passthrough. */
++    if (!detroit_metalfx_enabled()) return FALSE;
++    if (instance->p_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device->host.physical_device,
++            surface->obj.host.surface, &caps) != VK_SUCCESS) return FALSE;
++    return caps.currentExtent.width == extent->width && caps.currentExtent.height == extent->height;
++}
++
+ static void adjust_surface_capabilities( struct vulkan_instance *instance, struct surface *surface,
+                                          VkSurfaceCapabilitiesKHR *capabilities )
+ {
+@@ -1592,6 +1621,19 @@
+      * https://vulkan.gpuinfo.org/displayreport.php?id=9121#surface
+      */
+     if (!capabilities->maxImageCount) capabilities->maxImageCount = max( capabilities->minImageCount, 16 );
++
++    /* The private host already provides valid lower-resolution images and native-size output.
++     * Do not overwrite its real render extent with the Win32 display rectangle. */
++    if (detroit_metalfx_enabled() && capabilities->currentExtent.width && capabilities->currentExtent.height &&
++        capabilities->currentExtent.width != ~0u && capabilities->currentExtent.height != ~0u)
++    {
++        static LONG logged;
++        capabilities->minImageExtent = capabilities->maxImageExtent = capabilities->currentExtent;
++        if (InterlockedIncrement(&logged) <= 4)
++            fprintf(stderr, "[detroit-metalfx-wsi] HB_DETROIT_METALFX_WSI_V1 host render extent=%ux%u\n",
++                    capabilities->currentExtent.width, capabilities->currentExtent.height);
++        return;
++    }
+ 
+     /* Update the image extents to match what the Win32 WSI would provide. */
+     /* FIXME: handle DPI scaling, somehow */
+@@ -1878,7 +1920,7 @@
+     res = device->p_vkAcquireNextImage2KHR( device->host.device, &acquire_info_host, image_index );
+ 
+     if (!res && get_surface_rect( surface->hwnd, &client_rect, NtUserGetDpiForWindow( surface->hwnd ) ) &&
+-        !extents_equals( &swapchain->extents, &client_rect ))
++        !detroit_extents_match( device->physical_device, surface, &swapchain->extents, &client_rect ))
+     {
+         WARN( "Swapchain size %dx%d does not match client rect %s, returning VK_SUBOPTIMAL_KHR\n",
+               swapchain->extents.width, swapchain->extents.height, wine_dbgstr_rect( &client_rect ) );
+@@ -1904,7 +1946,7 @@
+                                               image_index );
+ 
+     if (!res && get_surface_rect( surface->hwnd, &client_rect, NtUserGetDpiForWindow( surface->hwnd ) ) &&
+-        !extents_equals( &swapchain->extents, &client_rect ))
++        !detroit_extents_match( device->physical_device, surface, &swapchain->extents, &client_rect ))
+     {
+         WARN( "Swapchain size %dx%d does not match client rect %s, returning VK_SUBOPTIMAL_KHR\n",
+               swapchain->extents.width, swapchain->extents.height, wine_dbgstr_rect( &client_rect ) );
+@@ -1972,7 +2014,7 @@
+         }
+         else if (swapchain_res)
+             WARN( "Present returned status %d for swapchain %p\n", swapchain_res, swapchain );
+-        else if (!extents_equals( &swapchain->extents, &client_rect ))
++        else if (!detroit_extents_match( device->physical_device, surface, &swapchain->extents, &client_rect ))
+         {
+             WARN( "Swapchain size %dx%d does not match client rect %s, returning VK_SUBOPTIMAL_KHR\n",
+                   swapchain->extents.width, swapchain->extents.height, wine_dbgstr_rect( &client_rect ) );

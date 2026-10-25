@@ -1,5 +1,7 @@
 # 《底特律：变人》Highball 诊断工具
 
+MetalFX 必须配套 Wine WSI 修补；此前只替换 MoltenVK 的实验版本已撤回。现已补充经过 Wine 的 Windows Vulkan 启动、超分、尺寸切换与关闭测试。
+
 实验功能：[MetalFX 空间超分](docs/zh-CN/metalfx-spatial.md) 作为单独构建的独立引擎版本提供。离屏呈现验证通过，游戏画面及帧数仍待实测。
 
 可选：[背景模糊绕过方案](docs/zh-CN/background-blur.md)，附带版本校验、完整 EXE 备份及回滚。需用户明确选择，画面效果仍待实测。工具在当前源码中，v0.4.1 发布包尚不包含。

@@ -39,10 +39,10 @@ index 00000000..8a17c909
 +extern "C" const char* hb_detroit_metalfx_default_marker();
 diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKDetroitMetalFX.mm b/MoltenVK/MoltenVK/GPUObjects/MVKDetroitMetalFX.mm
 new file mode 100644
-index 00000000..c4e0eaf5
+index 00000000..dcb94756
 --- /dev/null
 +++ b/MoltenVK/MoltenVK/GPUObjects/MVKDetroitMetalFX.mm
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,58 @@
 +#include "MVKDetroitMetalFX.h"
 +#include <cmath>
 +#include <cstdlib>
@@ -58,6 +58,10 @@ index 00000000..c4e0eaf5
 +#else
 +    return "HB_DETROIT_METALFX_DEFAULT_OFF_V1";
 +#endif
++}
++
++extern "C" __attribute__((visibility("default"))) uint32_t hb_detroit_metalfx_surface_scaling_enabled() {
++    return mvkDTRMetalFXEnabled(nil) ? 1 : 0;
 +}
 +
 +double mvkDTRMetalFXScale() {
@@ -89,7 +93,10 @@ index 00000000..c4e0eaf5
 +}
 +
 +CGSize mvkDTRMetalFXRenderSize(CGSize size, id<MTLDevice> device) {
-+    if (!mvkDTRMetalFXEnabled(device) || size.width < 4 || size.height < 4) { return size; }
++    // Detroit's fixed bootstrap requests 1024x576 without adopting a scaled extent.
++    // Keep small bootstrap surfaces native, including their advertised capabilities.
++    if (!mvkDTRMetalFXEnabled(device) || size.width < 4 || size.height < 4 ||
++        (size.width <= 1024 && size.height <= 576)) { return size; }
 +    double scale = mvkDTRMetalFXScale();
 +    return CGSizeMake(fmax(2.0, floor(size.width * scale / 2.0) * 2.0),
 +                      fmax(2.0, floor(size.height * scale / 2.0) * 2.0));
@@ -189,7 +196,7 @@ index f52f742a..1ec92e66 100644
  
  void MVKSurface::setActiveSwapchain(MVKSwapchain* swapchain) {
 diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.h b/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.h
-index 6b91ad61..44f20cea 100644
+index 6b91ad61..fb751181 100644
 --- a/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.h
 +++ b/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.h
 @@ -54,6 +54,13 @@ public:
@@ -206,17 +213,18 @@ index 6b91ad61..44f20cea 100644
  	/** Returns the image at the specified index. */
  	MVKPresentableSwapchainImage* getPresentableImage(uint32_t index) { return _presentableImages[index]; }
  
-@@ -148,4 +155,8 @@ protected:
+@@ -148,4 +155,9 @@ protected:
  	uint32_t _presentHistoryIndex = 0;
  	uint32_t _presentHistoryHeadIndex = 0;
  	bool _isDeliberatelyScaled = false;
 +    id _metalFXScaler = nil;
++    bool _metalFXPassthrough = false;
 +    VkExtent2D _metalFXOutputExtent = {0, 0};
 +    std::mutex _metalFXLock;
 +    uint64_t _metalFXFrames = 0;
  };
 diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.mm b/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.mm
-index 3d8911a8..0d6fbac7 100644
+index 3d8911a8..1554ae9c 100644
 --- a/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.mm
 +++ b/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.mm
 @@ -17,6 +17,7 @@
@@ -227,7 +235,20 @@ index 3d8911a8..0d6fbac7 100644
  #include "MVKSwapchain.h"
  #include "MVKImage.h"
  #include "MVKQueue.h"
-@@ -542,6 +543,7 @@ static inline CIE1931XY VkXYColorEXTToCIE1931XY(VkXYColorEXT xy) {
+@@ -214,6 +215,12 @@ static bool mvkDTRShouldLogSwapchainImage(VkExtent2D extent) {
+ bool MVKSwapchain::hasOptimalSurface() {
+ 	if (_isDeliberatelyScaled || isHeadless()) { return true; }
+ 
++    if (_metalFXPassthrough) {
++        auto* layer = getCAMetalLayer();
++        return layer && mvkVkExtent2DsAreEqual(mvkVkExtent2DFromCGSize(layer.drawableSize), _imageExtent) &&
++               mvkVkExtent2DsAreEqual(mvkVkExtent2DFromCGSize(layer.naturalDrawableSizeMVK), _imageExtent);
++    }
++
+ 	VkExtent2D surfExtent = _surface->getExtent();
+ 	return (mvkVkExtent2DsAreEqual(surfExtent, _imageExtent) &&
+ 			mvkVkExtent2DsAreEqual(surfExtent, _surface->getNaturalExtent()));
+@@ -542,6 +549,7 @@ static inline CIE1931XY VkXYColorEXTToCIE1931XY(VkXYColorEXT xy) {
  							   mtlFeats.minSwapchainImageCount,
  							   mtlFeats.maxSwapchainImageCount);
  	initCAMetalLayer(pCreateInfo, pScalingInfo, imgCnt);
@@ -235,7 +256,7 @@ index 3d8911a8..0d6fbac7 100644
      initSurfaceImages(pCreateInfo, imgCnt);		// After initCAMetalLayer()
  	mvkDTRSurfaceLog("create swapchain end swapchain=%p result=%d image_count=%zu layer=%p", this, getConfigurationResult(), _presentableImages.size(), getCAMetalLayer());
  }
-@@ -592,6 +594,37 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
+@@ -592,6 +600,38 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
  	if ( !mtlLayer || getIsSurfaceLost() ) { return; }
  
  	VkExtent2D prevSurfaceExtent = _surface->getExtent();
@@ -244,10 +265,10 @@ index 3d8911a8..0d6fbac7 100644
 +            CGSize display = mtlLayer.naturalDrawableSizeMVK;
 +            VkExtent2D expected = mvkVkExtent2DFromCGSize(mvkDTRMetalFXRenderSize(display, getMTLDevice()));
 +            if (!mvkVkExtent2DsAreEqual(expected, _imageExtent) || display.width <= _imageExtent.width || display.height <= _imageExtent.height) {
-+                setConfigurationResult(reportError(VK_ERROR_OUT_OF_DATE_KHR, "Detroit MetalFX: requested %ux%u does not match scaled surface %ux%u; query surface capabilities again",
-+                                                  _imageExtent.width, _imageExtent.height, expected.width, expected.height));
-+                return;
-+            }
++                _metalFXPassthrough = true;
++                fprintf(stderr, "[detroit-metalfx] passthrough fixed/native request=%ux%u scaled_surface=%ux%u; no upscaling claimed\n",
++                        _imageExtent.width, _imageExtent.height, expected.width, expected.height);
++            } else {
 +            _metalFXOutputExtent = mvkVkExtent2DFromCGSize(display);
 +            MTLPixelFormat format = getPixelFormats()->getMTLPixelFormat(pCreateInfo->imageFormat);
 +            if (format != MTLPixelFormatBGRA8Unorm && format != MTLPixelFormatRGBA8Unorm && format != MTLPixelFormatRGBA16Float) {
@@ -268,12 +289,13 @@ index 3d8911a8..0d6fbac7 100644
 +            fprintf(stderr, "[detroit-metalfx] HB_DETROIT_METALFX_SPATIAL_V1 enabled spatial input=%ux%u output=%ux%u scale=%.3f format=%llu default=%s\n",
 +                    _imageExtent.width, _imageExtent.height, _metalFXOutputExtent.width, _metalFXOutputExtent.height,
 +                    mvkDTRMetalFXScale(), (unsigned long long)format, hb_detroit_metalfx_default_marker());
++            }
 +        }
 +    }
  	auto* oldSwapchain = (MVKSwapchain*)pCreateInfo->oldSwapchain;
  	mvkDTRSurfaceLog("init CAMetalLayer swapchain=%p layer=%p old=%p image_extent=%ux%u prev_surface=%ux%u natural=%ux%u", this, mtlLayer, oldSwapchain, _imageExtent.width, _imageExtent.height, prevSurfaceExtent.width, prevSurfaceExtent.height, _surface->getNaturalExtent().width, _surface->getNaturalExtent().height);
  	_surface->logNativeState("init CAMetalLayer begin");
-@@ -607,7 +640,7 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
+@@ -607,7 +647,7 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
  
  	auto minMagFilter = getMVKConfig().swapchainMinMagFilterUseNearest ? kCAFilterNearest : kCAFilterLinear;
  	mvkDTRRunWithDisabledLayerActions(^{
@@ -282,7 +304,7 @@ index 3d8911a8..0d6fbac7 100644
  		mtlLayer.device = getMTLDevice();
  		mtlLayer.pixelFormat = getPixelFormats()->getMTLPixelFormat(pCreateInfo->imageFormat);
  		mtlLayer.maximumDrawableCount = imgCnt;
-@@ -615,7 +648,7 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
+@@ -615,7 +655,7 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
  		mtlLayer.minificationFilter = minMagFilter;
  		mtlLayer.magnificationFilter = minMagFilter;
  		mtlLayer.contentsGravity = getCALayerContentsGravity(pScalingInfo);
@@ -291,7 +313,7 @@ index 3d8911a8..0d6fbac7 100644
  												  VK_IMAGE_USAGE_TRANSFER_DST_BIT |
  												  VK_IMAGE_USAGE_SAMPLED_BIT |
  												  VK_IMAGE_USAGE_STORAGE_BIT)) &&
-@@ -742,7 +775,15 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
+@@ -742,7 +782,15 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
  	for (uint32_t imgIdx = 0; imgIdx < imgCnt; imgIdx++) {
  		mvkDTRSurfaceLog("create presentable image begin swapchain=%p index=%u extent=%ux%u format=%u usage=0x%x", this, imgIdx, imgExtent.width, imgExtent.height, imgInfo.format, imgInfo.usage);
  		auto* img = _device->createPresentableSwapchainImage(&imgInfo, this, imgIdx, nullptr);
@@ -307,7 +329,7 @@ index 3d8911a8..0d6fbac7 100644
  		mvkDTRSurfaceLog("create presentable image end swapchain=%p index=%u image=%p result=%d", this, imgIdx, img, img ? img->getConfigurationResult() : VK_ERROR_OUT_OF_HOST_MEMORY);
  	}
  
-@@ -779,5 +820,41 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
+@@ -779,5 +827,41 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
  }
  
  MVKSwapchain::~MVKSwapchain() {

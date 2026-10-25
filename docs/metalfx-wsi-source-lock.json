@@ -1,0 +1,16 @@
+{
+  "source_archive_reference": "../audio/source-lock.json",
+  "component": "CrossOver 26.3 Wine dlls/win32u/vulkan.c",
+  "license": "LGPL-2.1-or-later",
+  "original_vulkan_c_sha256": "74e32d3cdd8e4d92fe72998d90e71c62e5a14e6fe146e518f87b57cd866488a0",
+  "patched_vulkan_c_sha256": "b10c2f88efd2e14baa13b1666229451c9b848a6e0bf8884518bc48a3b96c22b8",
+  "patch_sha256": "f278b67c5bacac5558b0172f1cad238df128fd196d09ecc503b757c3cf905285",
+  "reviewed_original_win32u_sha256": "ae95ed75ffad3267c413d28fbcd46a360fe26c3de60fdd6ffeeff3510b891ab6",
+  "required_sonames": {
+    "freetype": "libfreetype.6.dylib",
+    "vulkan": "libMoltenVK.dylib"
+  },
+  "freetype_required": true,
+  "original_exports_preserved": true,
+  "gameplay_tested": false
+}
