@@ -1,0 +1,351 @@
+diff --git a/MoltenVK/CMakeLists.txt b/MoltenVK/CMakeLists.txt
+index 1296ce61..45533761 100644
+--- a/MoltenVK/CMakeLists.txt
++++ b/MoltenVK/CMakeLists.txt
+@@ -9,6 +9,12 @@ file(GLOB_RECURSE SOURCES "MoltenVK/*.c" "MoltenVK/*.cpp" "MoltenVK/*.m" "Molten
+ add_library(MoltenVK SHARED ${SOURCES})
+ add_library(MoltenVK::MoltenVK ALIAS MoltenVK)
+ 
++option(MVK_DETROIT_METALFX_DEFAULT "Enable private Detroit MetalFX spatial scaling by default" OFF)
++target_link_options(MoltenVK PRIVATE "-Wl,-weak_framework,MetalFX")
++if(MVK_DETROIT_METALFX_DEFAULT)
++    target_compile_definitions(MoltenVK PRIVATE MVK_DTR_METALFX_DEFAULT=1)
++endif()
++
+ target_include_directories(MoltenVK
+ 	PUBLIC
+ 		"${CMAKE_CURRENT_SOURCE_DIR}/include"
+@@ -61,4 +67,4 @@ else()
+ endif()
+ 
+ include(Vulkan-Headers)
+-target_link_libraries(MoltenVK PUBLIC Vulkan::Headers)
+\ No newline at end of file
++target_link_libraries(MoltenVK PUBLIC Vulkan::Headers)
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKDetroitMetalFX.h b/MoltenVK/MoltenVK/GPUObjects/MVKDetroitMetalFX.h
+new file mode 100644
+index 00000000..8a17c909
+--- /dev/null
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKDetroitMetalFX.h
+@@ -0,0 +1,9 @@
++#pragma once
++#import <Metal/Metal.h>
++#import <MetalFX/MetalFX.h>
++
++// Private Detroit opt-in. No Vulkan feature or vertex-interface changes.
++bool mvkDTRMetalFXEnabled(id<MTLDevice> device);
++double mvkDTRMetalFXScale();
++CGSize mvkDTRMetalFXRenderSize(CGSize displaySize, id<MTLDevice> device);
++extern "C" const char* hb_detroit_metalfx_default_marker();
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKDetroitMetalFX.mm b/MoltenVK/MoltenVK/GPUObjects/MVKDetroitMetalFX.mm
+new file mode 100644
+index 00000000..c4e0eaf5
+--- /dev/null
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKDetroitMetalFX.mm
+@@ -0,0 +1,51 @@
++#include "MVKDetroitMetalFX.h"
++#include <cmath>
++#include <cstdlib>
++#include <cstring>
++
++#ifndef MVK_DTR_METALFX_DEFAULT
++#define MVK_DTR_METALFX_DEFAULT 0
++#endif
++
++extern "C" __attribute__((visibility("default"))) const char* hb_detroit_metalfx_default_marker() {
++#if MVK_DTR_METALFX_DEFAULT
++    return "HB_DETROIT_METALFX_DEFAULT_ON_V1";
++#else
++    return "HB_DETROIT_METALFX_DEFAULT_OFF_V1";
++#endif
++}
++
++double mvkDTRMetalFXScale() {
++    static double value = [] {
++        const char* text = getenv("MVK_DTR_METALFX_SCALE");
++        if (!text || !*text) { return 0.75; }
++        char* end = nullptr;
++        double scale = strtod(text, &end);
++        return end && !*end && std::isfinite(scale) && scale >= 0.5 && scale < 1.0 ? scale : 0.75;
++    }();
++    return value;
++}
++
++bool mvkDTRMetalFXEnabled(id<MTLDevice> device) {
++    static bool requested = [] {
++        const char* text = getenv("MVK_DTR_METALFX_SPATIAL");
++        if (!text || !*text) { return bool(MVK_DTR_METALFX_DEFAULT); }
++        return !strcmp(text, "1") || !strcasecmp(text, "true");
++    }();
++    if (!requested) { return false; }
++    if (@available(macOS 13.0, *)) {
++        if (!device) {
++            static id<MTLDevice> defaultDevice = MTLCreateSystemDefaultDevice();
++            device = defaultDevice;
++        }
++        return device && [MTLFXSpatialScalerDescriptor supportsDevice:device];
++    }
++    return false;
++}
++
++CGSize mvkDTRMetalFXRenderSize(CGSize size, id<MTLDevice> device) {
++    if (!mvkDTRMetalFXEnabled(device) || size.width < 4 || size.height < 4) { return size; }
++    double scale = mvkDTRMetalFXScale();
++    return CGSizeMake(fmax(2.0, floor(size.width * scale / 2.0) * 2.0),
++                      fmax(2.0, floor(size.height * scale / 2.0) * 2.0));
++}
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKImage.h b/MoltenVK/MoltenVK/GPUObjects/MVKImage.h
+index 74e5a626..d646d552 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKImage.h
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKImage.h
+@@ -511,6 +511,8 @@ protected:
+ 
+ 	id<CAMetalDrawable> _mtlDrawable = nil;
+ 	id<MTLTexture> _mtlTextureHeadless = nil;
++    id<MTLTexture> _mtlTextureMetalFXInput = nil;
++    id<MTLTexture> _mtlTextureMetalFXOutput = nil;
+ 	MVKSwapchainImageAvailability _availability;
+ 	MVKSmallVector<MVKSwapchainSignaler, 1> _availabilitySignalers;
+ 	MVKSwapchainSignaler _preSignaler = {};
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKImage.mm b/MoltenVK/MoltenVK/GPUObjects/MVKImage.mm
+index 2f9992e5..34eb540a 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKImage.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKImage.mm
+@@ -1756,6 +1756,7 @@ static void signalAndUntrack(const MVKSwapchainSignaler& signaler) {
+ 
+ // If not headless, retrieve the MTLTexture directly from the CAMetalDrawable.
+ id<MTLTexture> MVKPresentableSwapchainImage::getMTLTexture(uint8_t planeIndex) {
++	if (_mtlTextureMetalFXInput) { getCAMetalDrawable(); return _mtlTextureMetalFXInput; }
+ 	return _mtlTextureHeadless ? _mtlTextureHeadless : getCAMetalDrawable().texture;
+ }
+ 
+@@ -1781,6 +1782,10 @@ static void signalAndUntrack(const MVKSwapchainSignaler& signaler) {
+ 	// But get current drawable now, intead of in handler, because a new drawable might be acquired by then.
+ 	// Attach present handler before presenting to avoid race condition.
+ 	id<CAMetalDrawable> mtlDrwbl = getCAMetalDrawable();
++    if (_swapchain->isMetalFXEnabled()) {
++        VkResult result = _swapchain->encodeMetalFX(_mtlTextureMetalFXInput, _mtlTextureMetalFXOutput, mtlDrwbl.texture, mtlCmdBuff);
++        if (result != VK_SUCCESS) { return result; }
++    }
+ 	if (shouldLog) {
+ 		id<MTLTexture> tex = mtlDrwbl.texture;
+ 		mvkDTRSurfaceLog("present drawable image=%p swapchain=%p index=%u drawable=%p layer=%p texture=%p tex_size=%zux%zu pixfmt=%llu",
+@@ -2060,6 +2065,22 @@ static void signalAndUntrack(const MVKSwapchainSignaler& signaler) {
+ 	_availability.acquisitionID = _swapchain->getNextAcquisitionID();
+ 	_availability.isAvailable = true;
+ 
++    if (!swapchain->isHeadless() && swapchain->isMetalFXEnabled()) {
++        @autoreleasepool {
++            MTLTextureDescriptor* desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:getMTLPixelFormat()
++                                               width:pCreateInfo->extent.width height:pCreateInfo->extent.height mipmapped:NO];
++            desc.storageMode = MTLStorageModePrivate;
++            desc.usage = getMTLTextureUsage(getMTLPixelFormat()) | swapchain->getMetalFXInputUsage() | MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
++            _mtlTextureMetalFXInput = [getMTLDevice() newTextureWithDescriptor:desc];
++            VkExtent2D output = swapchain->getMetalFXOutputExtent();
++            desc.width = output.width; desc.height = output.height; desc.usage = swapchain->getMetalFXOutputUsage();
++            _mtlTextureMetalFXOutput = [getMTLDevice() newTextureWithDescriptor:desc];
++            if (!_mtlTextureMetalFXInput || !_mtlTextureMetalFXOutput) {
++                setConfigurationResult(reportError(VK_ERROR_OUT_OF_DEVICE_MEMORY, "Detroit MetalFX: presentation texture allocation failed"));
++            }
++        }
++    }
++
+ 	if (swapchain->isHeadless()) {
+ 		@autoreleasepool {
+ 			MTLTextureDescriptor* mtlTexDesc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat: getMTLPixelFormat()
+@@ -2079,6 +2100,8 @@ static void signalAndUntrack(const MVKSwapchainSignaler& signaler) {
+ 	releaseMetalDrawable();
+ 	[_mtlTextureHeadless release];
+ 	_mtlTextureHeadless = nil;
++    [_mtlTextureMetalFXInput release]; _mtlTextureMetalFXInput = nil;
++    [_mtlTextureMetalFXOutput release]; _mtlTextureMetalFXOutput = nil;
+ 	MVKSwapchainImage::destroy();
+ }
+ 
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKSurface.mm b/MoltenVK/MoltenVK/GPUObjects/MVKSurface.mm
+index f52f742a..1ec92e66 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKSurface.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKSurface.mm
+@@ -17,6 +17,7 @@
+  */
+ 
+ #include "MVKSurface.h"
++#include "MVKDetroitMetalFX.h"
+ #include "MVKSwapchain.h"
+ #include "MVKInstance.h"
+ #include "MVKFoundation.h"
+@@ -368,11 +369,11 @@ static bool mvkDTRAttachCachedLayerToStableWindowHost(const void* surface, NSWin
+ }
+ 
+ VkExtent2D MVKSurface::getExtent() {
+-	return _mtlCAMetalLayer ? mvkVkExtent2DFromCGSize(_mtlCAMetalLayer.drawableSize) : kMVKUndefinedExtent;
++	return _mtlCAMetalLayer ? mvkVkExtent2DFromCGSize(mvkDTRMetalFXRenderSize(_mtlCAMetalLayer.drawableSize, _mtlCAMetalLayer.device)) : kMVKUndefinedExtent;
+ }
+ 
+ VkExtent2D MVKSurface::getNaturalExtent() {
+-	return _mtlCAMetalLayer ? mvkVkExtent2DFromCGSize(_mtlCAMetalLayer.naturalDrawableSizeMVK) : kMVKUndefinedExtent;
++	return _mtlCAMetalLayer ? mvkVkExtent2DFromCGSize(mvkDTRMetalFXRenderSize(_mtlCAMetalLayer.naturalDrawableSizeMVK, _mtlCAMetalLayer.device)) : kMVKUndefinedExtent;
+ }
+ 
+ void MVKSurface::setActiveSwapchain(MVKSwapchain* swapchain) {
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.h b/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.h
+index 6b91ad61..44f20cea 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.h
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.h
+@@ -54,6 +54,13 @@ public:
+ 	/** Returns the size of the images in this swapchain. */
+ 	VkExtent2D getImageExtent() { return _imageExtent; }
+ 
++    bool isMetalFXEnabled() { return _metalFXScaler != nil; }
++    VkExtent2D getMetalFXOutputExtent() { return _metalFXOutputExtent; }
++    MTLTextureUsage getMetalFXInputUsage();
++    MTLTextureUsage getMetalFXOutputUsage();
++    VkResult encodeMetalFX(id<MTLTexture> input, id<MTLTexture> output,
++                           id<MTLTexture> drawable, id<MTLCommandBuffer> commandBuffer);
++
+ 	/** Returns the image at the specified index. */
+ 	MVKPresentableSwapchainImage* getPresentableImage(uint32_t index) { return _presentableImages[index]; }
+ 
+@@ -148,4 +155,8 @@ protected:
+ 	uint32_t _presentHistoryIndex = 0;
+ 	uint32_t _presentHistoryHeadIndex = 0;
+ 	bool _isDeliberatelyScaled = false;
++    id _metalFXScaler = nil;
++    VkExtent2D _metalFXOutputExtent = {0, 0};
++    std::mutex _metalFXLock;
++    uint64_t _metalFXFrames = 0;
+ };
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.mm b/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.mm
+index 3d8911a8..0d6fbac7 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.mm
+@@ -17,6 +17,7 @@
+  */
+ 
+ #include "MVKSurface.h"
++#include "MVKDetroitMetalFX.h"
+ #include "MVKSwapchain.h"
+ #include "MVKImage.h"
+ #include "MVKQueue.h"
+@@ -542,6 +543,7 @@ static inline CIE1931XY VkXYColorEXTToCIE1931XY(VkXYColorEXT xy) {
+ 							   mtlFeats.minSwapchainImageCount,
+ 							   mtlFeats.maxSwapchainImageCount);
+ 	initCAMetalLayer(pCreateInfo, pScalingInfo, imgCnt);
++    if (getConfigurationResult() != VK_SUCCESS) { return; }
+     initSurfaceImages(pCreateInfo, imgCnt);		// After initCAMetalLayer()
+ 	mvkDTRSurfaceLog("create swapchain end swapchain=%p result=%d image_count=%zu layer=%p", this, getConfigurationResult(), _presentableImages.size(), getCAMetalLayer());
+ }
+@@ -592,6 +594,37 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
+ 	if ( !mtlLayer || getIsSurfaceLost() ) { return; }
+ 
+ 	VkExtent2D prevSurfaceExtent = _surface->getExtent();
++    if (mvkDTRMetalFXEnabled(getMTLDevice())) {
++        if (@available(macOS 13.0, *)) {
++            CGSize display = mtlLayer.naturalDrawableSizeMVK;
++            VkExtent2D expected = mvkVkExtent2DFromCGSize(mvkDTRMetalFXRenderSize(display, getMTLDevice()));
++            if (!mvkVkExtent2DsAreEqual(expected, _imageExtent) || display.width <= _imageExtent.width || display.height <= _imageExtent.height) {
++                setConfigurationResult(reportError(VK_ERROR_OUT_OF_DATE_KHR, "Detroit MetalFX: requested %ux%u does not match scaled surface %ux%u; query surface capabilities again",
++                                                  _imageExtent.width, _imageExtent.height, expected.width, expected.height));
++                return;
++            }
++            _metalFXOutputExtent = mvkVkExtent2DFromCGSize(display);
++            MTLPixelFormat format = getPixelFormats()->getMTLPixelFormat(pCreateInfo->imageFormat);
++            if (format != MTLPixelFormatBGRA8Unorm && format != MTLPixelFormatRGBA8Unorm && format != MTLPixelFormatRGBA16Float) {
++                setConfigurationResult(reportError(VK_ERROR_FORMAT_NOT_SUPPORTED, "Detroit MetalFX: unvalidated swapchain format %llu", (unsigned long long)format));
++                return;
++            }
++            MTLFXSpatialScalerDescriptor* desc = [MTLFXSpatialScalerDescriptor new];
++            desc.inputWidth = _imageExtent.width; desc.inputHeight = _imageExtent.height;
++            desc.outputWidth = _metalFXOutputExtent.width; desc.outputHeight = _metalFXOutputExtent.height;
++            desc.colorTextureFormat = format; desc.outputTextureFormat = format;
++            desc.colorProcessingMode = format == MTLPixelFormatRGBA16Float ? MTLFXSpatialScalerColorProcessingModeHDR : MTLFXSpatialScalerColorProcessingModePerceptual;
++            _metalFXScaler = [desc newSpatialScalerWithDevice:getMTLDevice()];
++            [desc release];
++            if (!_metalFXScaler) {
++                setConfigurationResult(reportError(VK_ERROR_INITIALIZATION_FAILED, "Detroit MetalFX: spatial scaler creation failed"));
++                return;
++            }
++            fprintf(stderr, "[detroit-metalfx] HB_DETROIT_METALFX_SPATIAL_V1 enabled spatial input=%ux%u output=%ux%u scale=%.3f format=%llu default=%s\n",
++                    _imageExtent.width, _imageExtent.height, _metalFXOutputExtent.width, _metalFXOutputExtent.height,
++                    mvkDTRMetalFXScale(), (unsigned long long)format, hb_detroit_metalfx_default_marker());
++        }
++    }
+ 	auto* oldSwapchain = (MVKSwapchain*)pCreateInfo->oldSwapchain;
+ 	mvkDTRSurfaceLog("init CAMetalLayer swapchain=%p layer=%p old=%p image_extent=%ux%u prev_surface=%ux%u natural=%ux%u", this, mtlLayer, oldSwapchain, _imageExtent.width, _imageExtent.height, prevSurfaceExtent.width, prevSurfaceExtent.height, _surface->getNaturalExtent().width, _surface->getNaturalExtent().height);
+ 	_surface->logNativeState("init CAMetalLayer begin");
+@@ -607,7 +640,7 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
+ 
+ 	auto minMagFilter = getMVKConfig().swapchainMinMagFilterUseNearest ? kCAFilterNearest : kCAFilterLinear;
+ 	mvkDTRRunWithDisabledLayerActions(^{
+-		mtlLayer.drawableSize = mvkCGSizeFromVkExtent2D(_imageExtent);
++		mtlLayer.drawableSize = mvkCGSizeFromVkExtent2D(isMetalFXEnabled() ? _metalFXOutputExtent : _imageExtent);
+ 		mtlLayer.device = getMTLDevice();
+ 		mtlLayer.pixelFormat = getPixelFormats()->getMTLPixelFormat(pCreateInfo->imageFormat);
+ 		mtlLayer.maximumDrawableCount = imgCnt;
+@@ -615,7 +648,7 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
+ 		mtlLayer.minificationFilter = minMagFilter;
+ 		mtlLayer.magnificationFilter = minMagFilter;
+ 		mtlLayer.contentsGravity = getCALayerContentsGravity(pScalingInfo);
+-		mtlLayer.framebufferOnly = !mvkIsAnyFlagEnabled(pCreateInfo->imageUsage, (VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
++		mtlLayer.framebufferOnly = !isMetalFXEnabled() && !mvkIsAnyFlagEnabled(pCreateInfo->imageUsage, (VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+ 												  VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+ 												  VK_IMAGE_USAGE_SAMPLED_BIT |
+ 												  VK_IMAGE_USAGE_STORAGE_BIT)) &&
+@@ -742,7 +775,15 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
+ 	for (uint32_t imgIdx = 0; imgIdx < imgCnt; imgIdx++) {
+ 		mvkDTRSurfaceLog("create presentable image begin swapchain=%p index=%u extent=%ux%u format=%u usage=0x%x", this, imgIdx, imgExtent.width, imgExtent.height, imgInfo.format, imgInfo.usage);
+ 		auto* img = _device->createPresentableSwapchainImage(&imgInfo, this, imgIdx, nullptr);
++        if (isMetalFXEnabled() && !img) {
++            setConfigurationResult(reportError(VK_ERROR_OUT_OF_HOST_MEMORY, "Detroit MetalFX: swapchain image creation failed"));
++            return;
++        }
+ 		_presentableImages.push_back(img);
++        if (isMetalFXEnabled() && img->getConfigurationResult() != VK_SUCCESS) {
++            setConfigurationResult(img->getConfigurationResult());
++            return;
++        }
+ 		mvkDTRSurfaceLog("create presentable image end swapchain=%p index=%u image=%p result=%d", this, imgIdx, img, img ? img->getConfigurationResult() : VK_ERROR_OUT_OF_HOST_MEMORY);
+ 	}
+ 
+@@ -779,5 +820,41 @@ static CALayerContentsGravity getCALayerContentsGravity(VkSwapchainPresentScalin
+ }
+ 
+ MVKSwapchain::~MVKSwapchain() {
++    [_metalFXScaler release];
+     if (_licenseWatermark) { _licenseWatermark->destroy(); }
+ }
++
++MTLTextureUsage MVKSwapchain::getMetalFXInputUsage() {
++    return [(id<MTLFXSpatialScaler>)_metalFXScaler colorTextureUsage];
++}
++
++MTLTextureUsage MVKSwapchain::getMetalFXOutputUsage() {
++    return [(id<MTLFXSpatialScaler>)_metalFXScaler outputTextureUsage];
++}
++
++VkResult MVKSwapchain::encodeMetalFX(id<MTLTexture> input, id<MTLTexture> output,
++                                    id<MTLTexture> drawable, id<MTLCommandBuffer> commandBuffer) {
++    std::lock_guard<std::mutex> lock(_metalFXLock);
++    if (!input || !output || !drawable || input.width != _imageExtent.width || input.height != _imageExtent.height ||
++        output.width != _metalFXOutputExtent.width || output.height != _metalFXOutputExtent.height ||
++        drawable.width != output.width || drawable.height != output.height ||
++        input.pixelFormat != drawable.pixelFormat || output.pixelFormat != drawable.pixelFormat) {
++        return reportError(VK_ERROR_OUT_OF_DATE_KHR, "Detroit MetalFX: resized or incompatible presentation textures; recreate swapchain");
++    }
++    id<MTLFXSpatialScaler> scaler = (id<MTLFXSpatialScaler>)_metalFXScaler;
++    scaler.colorTexture = input; scaler.outputTexture = output;
++    scaler.inputContentWidth = input.width; scaler.inputContentHeight = input.height;
++    [scaler encodeToCommandBuffer:commandBuffer];
++    id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
++    [blit copyFromTexture:output sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0)
++               sourceSize:MTLSizeMake(output.width,output.height,1) toTexture:drawable destinationSlice:0
++         destinationLevel:0 destinationOrigin:MTLOriginMake(0,0,0)];
++    [blit endEncoding];
++    scaler.colorTexture = nil; scaler.outputTexture = nil;
++    if (++_metalFXFrames <= 3) {
++        fprintf(stderr, "[detroit-metalfx] encoded frame=%llu input=%zux%zu output=%zux%zu\n",
++                (unsigned long long)_metalFXFrames, (size_t)input.width, (size_t)input.height,
++                (size_t)output.width, (size_t)output.height);
++    }
++    return VK_SUCCESS;
++}

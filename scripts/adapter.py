@@ -402,7 +402,9 @@ def verify_installed(base):
     lib = regular(e / "frameworks/libMoltenVK.dylib")
     arch(lib)
     if sha(lib) != j["candidate_sha256"]:
-        raise ValueError("Private dylib SHA-256 mismatch.")
+        from metalfx_engine import verify_library
+        verify_library(base, lib, j)
+        log("Private MetalFX spatial override verified; gameplay remains unverified.")
     exe = b / "drive_c/DetroitSteamLibrary/steamapps/common/Detroit Become Human/DetroitBecomeHuman.exe"
     if sha(exe) != j["source_exe_sha256"]:
         from blur_workaround import verify_executable

@@ -1,5 +1,7 @@
 # Detroit: Become Human on Highball
 
+Experimental: [MetalFX spatial scaling](docs/metalfx-spatial.md) is available as a separately built private-engine variant. Offscreen presentation validation passed; game visuals and FPS remain unverified.
+
 Optional: [background blur workaround](docs/background-blur.md), with version checks, full EXE backup and rollback. Explicit user choice is required; gameplay visuals remain unverified. Available in current source, not the v0.4.1 release archives.
 
 ## Audio output routing — v0.4.1-preview.1
